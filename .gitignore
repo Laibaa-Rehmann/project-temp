@@ -1,0 +1,70 @@
+# =============== PYTHON BACKEND ===============
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual environments
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# Specific venv paths
+backend_new/venv/
+backend_new/__pycache__/
+
+# Database files
+*.db
+*.sqlite3
+*.sqlite
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Build files
+build/
+dist/
+*.egg-info/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# =============== NODE FRONTEND ===============
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Node modules
+node_modules/
+
+# Build outputs
+dist/
+dist-ssr/
+*.local
+
+# Frontend specific (skillsync-frontend)
+skillsync-frontend/node_modules/
+skillsync-frontend/dist/
+
+# =============== EDITOR/IDE ===============
+.vscode/
+.idea/
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
