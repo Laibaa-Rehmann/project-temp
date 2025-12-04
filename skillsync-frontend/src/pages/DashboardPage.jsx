@@ -46,158 +46,168 @@ const DashboardPage = () => {
   const [loading, setLoading] = useState(true);
   const [user, setUser] = useState(null);
   
-  const fetchDashboardData = async () => {
-  setLoading(true);
-  
-  try {
-    const token = localStorage.getItem('token');
-    const userData = JSON.parse(localStorage.getItem('user') || 'null');
-    setUser(userData);
-    
-    if (!token) {
-      toast.error('Please login first');
-      return;
-    }
-    
-    console.log('Fetching dashboard data...');
-    
-    // Create headers object
-    const headers = {
-      'Authorization': `Bearer ${token}`,
-      'Content-Type': 'application/json'
-    };
-    
-    // Fetch all endpoints in parallel
-    const [statsResponse, activityResponse, jobsResponse, interviewsResponse] = await Promise.all([
-      fetch('http://localhost:8000/api/dashboard/stats', { headers }).catch(err => {
-        console.error('Stats fetch error:', err);
-        return { ok: false, status: 500 };
-      }),
-      fetch('http://localhost:8000/api/dashboard/activity', { headers }).catch(err => {
-        console.error('Activity fetch error:', err);
-        return { ok: false, status: 500 };
-      }),
-      fetch('http://localhost:8000/api/dashboard/recommended-jobs', { headers }).catch(err => {
-        console.error('Jobs fetch error:', err);
-        return { ok: false, status: 500 };
-      }),
-      fetch('http://localhost:8000/api/dashboard/upcoming-interviews', { headers }).catch(err => {
-        console.error('Interviews fetch error:', err);
-        return { ok: false, status: 500 };
-      })
-    ]);
-    
-    console.log('API Responses:', {
-      stats: statsResponse.status,
-      activity: activityResponse.status,
-      jobs: jobsResponse.status,
-      interviews: interviewsResponse.status
-    });
-    
-    // Handle stats response
-    let statsData = {
-      active_proposals: 0,
-      interviews: 0,
-      active_contracts: 0,
-      total_earnings: 0,
-      pending_earnings: 0,
-      profile_completion: userData?.profile_completion || 0,
-      response_rate: 0,
-      job_success_score: 0,
-      avg_response_time_hours: 0
-    };
-    
-    if (statsResponse.ok) {
-      try {
-        statsData = await statsResponse.json();
-      } catch (e) {
-        console.error('Error parsing stats JSON:', e);
-      }
-    } else {
-      console.warn('Stats endpoint failed:', statsResponse.status);
-    }
-    
-    // Handle activity response
-    let activityData = [];
-    if (activityResponse.ok) {
-      try {
-        activityData = await activityResponse.json();
-      } catch (e) {
-        console.error('Error parsing activity JSON:', e);
-      }
-    } else {
-      console.warn('Activity endpoint failed:', activityResponse.status);
-    }
-    
-    // Handle jobs response
-    let jobsData = [];
-    if (jobsResponse.ok) {
-      try {
-        jobsData = await jobsResponse.json();
-      } catch (e) {
-        console.error('Error parsing jobs JSON:', e);
-      }
-    } else {
-      console.warn('Jobs endpoint failed:', jobsResponse.status);
-    }
-    
-    // Handle interviews response
-    let interviewsData = { interviews: [] };
-    if (interviewsResponse.ok) {
-      try {
-        interviewsData = await interviewsResponse.json();
-      } catch (e) {
-        console.error('Error parsing interviews JSON:', e);
-      }
-    } else {
-      console.warn('Interviews endpoint failed:', interviewsResponse.status);
-    }
-    
-    // Update state with real data
-    setStats({
-      activeProposals: statsData.active_proposals,
-      interviews: statsData.interviews,
-      activeContracts: statsData.active_contracts,
-      totalEarnings: statsData.total_earnings,
-      pendingEarnings: statsData.pending_earnings,
-      profileCompletion: statsData.profile_completion,
-      responseRate: statsData.response_rate,
-      jobSuccessScore: statsData.job_success_score,
-      avgResponseTime: statsData.avg_response_time_hours
-    });
-    
-    setRecentActivity(activityData);
-    setRecommendedJobs(jobsData);
-    setUpcomingInterviews(interviewsData.interviews);
-    
-    console.log('Dashboard data updated:', {
-      stats: statsData,
-      activities: activityData.length,
-      jobs: jobsData.length,
-      interviews: interviewsData.interviews.length
-    });
-    
-  } catch (error) {
-    console.error('Error fetching dashboard data:', error);
-    toast.error('Failed to load dashboard data. Check console for details.');
-    
-    // Set fallback data
-    setStats({
-      activeProposals: 0,
-      interviews: 0,
-      activeContracts: 0,
-      totalEarnings: 0,
-      pendingEarnings: 0,
-      profileCompletion: user?.profile_completion || 0,
-      responseRate: 0,
-      jobSuccessScore: 0,
-      avgResponseTime: 0
-    });
-  } finally {
-    setLoading(false);
-  }
-};
+  // Pagination state for jobs
+  const [currentJobPage, setCurrentJobPage] = useState(1);
+  const [jobViewMode, setJobViewMode] = useState('list'); // 'list' or 'grid'
+  const jobsPerPage = 3;
 
+  // Calculate jobs to show
+  const indexOfLastJob = currentJobPage * jobsPerPage;
+  const indexOfFirstJob = indexOfLastJob - jobsPerPage;
+  const currentJobs = recommendedJobs.slice(indexOfFirstJob, indexOfLastJob);
+  const totalJobPages = Math.ceil(recommendedJobs.length / jobsPerPage);
+  
+  const fetchDashboardData = async () => {
+    setLoading(true);
+    
+    try {
+      const token = localStorage.getItem('token');
+      const userData = JSON.parse(localStorage.getItem('user') || 'null');
+      setUser(userData);
+      
+      if (!token) {
+        toast.error('Please login first');
+        return;
+      }
+      
+      console.log('Fetching dashboard data...');
+      
+      // Create headers object
+      const headers = {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      };
+      
+      // Fetch all endpoints in parallel
+      const [statsResponse, activityResponse, jobsResponse, interviewsResponse] = await Promise.all([
+        fetch('http://127.0.0.1:8000/api/dashboard/stats', { headers }).catch(err => {
+          console.error('Stats fetch error:', err);
+          return { ok: false, status: 500 };
+        }),
+        fetch('http://127.0.0.1:8000/api/dashboard/activity', { headers }).catch(err => {
+          console.error('Activity fetch error:', err);
+          return { ok: false, status: 500 };
+        }),
+        fetch('http://127.0.0.1:8000/api/dashboard/recommended-jobs', { headers }).catch(err => {
+          console.error('Jobs fetch error:', err);
+          return { ok: false, status: 500 };
+        }),
+        fetch('http://127.0.0.1:8000/api/dashboard/upcoming-interviews', { headers }).catch(err => {
+          console.error('Interviews fetch error:', err);
+          return { ok: false, status: 500 };
+        })
+      ]);
+      
+      console.log('API Responses:', {
+        stats: statsResponse.status,
+        activity: activityResponse.status,
+        jobs: jobsResponse.status,
+        interviews: interviewsResponse.status
+      });
+      
+      // Handle stats response
+      let statsData = {
+        active_proposals: 0,
+        interviews: 0,
+        active_contracts: 0,
+        total_earnings: 0,
+        pending_earnings: 0,
+        profile_completion: userData?.profile_completion || 0,
+        response_rate: 0,
+        job_success_score: 0,
+        avg_response_time_hours: 0
+      };
+      
+      if (statsResponse.ok) {
+        try {
+          statsData = await statsResponse.json();
+        } catch (e) {
+          console.error('Error parsing stats JSON:', e);
+        }
+      } else {
+        console.warn('Stats endpoint failed:', statsResponse.status);
+      }
+      
+      // Handle activity response
+      let activityData = [];
+      if (activityResponse.ok) {
+        try {
+          activityData = await activityResponse.json();
+        } catch (e) {
+          console.error('Error parsing activity JSON:', e);
+        }
+      } else {
+        console.warn('Activity endpoint failed:', activityResponse.status);
+      }
+      
+      // Handle jobs response
+      let jobsData = [];
+      if (jobsResponse.ok) {
+        try {
+          jobsData = await jobsResponse.json();
+        } catch (e) {
+          console.error('Error parsing jobs JSON:', e);
+        }
+      } else {
+        console.warn('Jobs endpoint failed:', jobsResponse.status);
+      }
+      
+      // Handle interviews response
+      let interviewsData = { interviews: [] };
+      if (interviewsResponse.ok) {
+        try {
+          interviewsData = await interviewsResponse.json();
+        } catch (e) {
+          console.error('Error parsing interviews JSON:', e);
+        }
+      } else {
+        console.warn('Interviews endpoint failed:', interviewsResponse.status);
+      }
+      
+      // Update state with real data
+      setStats({
+        activeProposals: statsData.active_proposals,
+        interviews: statsData.interviews,
+        activeContracts: statsData.active_contracts,
+        totalEarnings: statsData.total_earnings,
+        pendingEarnings: statsData.pending_earnings,
+        profileCompletion: statsData.profile_completion,
+        responseRate: statsData.response_rate,
+        jobSuccessScore: statsData.job_success_score,
+        avgResponseTime: statsData.avg_response_time_hours
+      });
+      
+      setRecentActivity(activityData);
+      setRecommendedJobs(jobsData);
+      setUpcomingInterviews(interviewsData.interviews);
+      
+      console.log('Dashboard data updated:', {
+        stats: statsData,
+        activities: activityData.length,
+        jobs: jobsData.length,
+        interviews: interviewsData.interviews.length
+      });
+      
+    } catch (error) {
+      console.error('Error fetching dashboard data:', error);
+      toast.error('Failed to load dashboard data. Check console for details.');
+      
+      // Set fallback data
+      setStats({
+        activeProposals: 0,
+        interviews: 0,
+        activeContracts: 0,
+        totalEarnings: 0,
+        pendingEarnings: 0,
+        profileCompletion: user?.profile_completion || 0,
+        responseRate: 0,
+        jobSuccessScore: 0,
+        avgResponseTime: 0
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
     console.log('Dashboard mounted');
@@ -314,98 +324,193 @@ const DashboardPage = () => {
     );
   };
 
-  const JobCard = ({ job }) => {
-  const handleApply = () => {
-    toast.success('Redirecting to job application...');
-    setTimeout(() => {
-      window.location.href = `/jobs/${job.id}`;
-    }, 1000);
-  };
+  const JobCard = ({ job, compact = false }) => {
+    const handleApply = () => {
+      toast.success('Redirecting to job application...');
+      setTimeout(() => {
+        window.location.href = `/jobs/${job.id}`;
+      }, 1000);
+    };
 
-  const handleSave = () => {
-    toast.success('Job saved to favorites!');
-    // Save job logic here
-  };
+    const handleSave = () => {
+      toast.success('Job saved to favorites!');
+      // Save job logic here
+    };
 
-  return (
-    <div className={`bg-white rounded-xl p-6 shadow-sm border ${job.is_featured ? 'border-primary-200 border-2' : 'border-gray-100'} hover:shadow-md transition-all duration-200`}>
-      <div className="flex justify-between items-start mb-4 gap-4">
-        {/* Left content - job info */}
-        <div className="flex-1 min-w-0"> {/* Added min-w-0 for proper text truncation */}
-          <div className="flex items-center gap-2 mb-2 flex-wrap">
-            <h3 className="text-lg font-semibold text-gray-900 truncate">{job.title}</h3>
-            {job.is_featured && (
-              <span className="px-2 py-1 bg-primary-50 text-primary-700 text-xs font-medium rounded-full whitespace-nowrap flex-shrink-0">
-                <Zap className="w-3 h-3 inline mr-1" />
-                Featured
+    if (compact) {
+      return (
+        <div className={`bg-white rounded-xl p-5 shadow-sm border ${job.is_featured ? 'border-primary-200 border-2' : 'border-gray-100'} hover:shadow-md transition-all duration-200 h-full flex flex-col`}>
+          <div className="flex-1">
+            <div className="flex items-center gap-2 mb-3">
+              <h3 className="text-lg font-semibold text-gray-900 truncate" title={job.title}>
+                {job.title}
+              </h3>
+              {job.is_featured && (
+                <span className="px-2 py-1 bg-primary-50 text-primary-700 text-xs font-medium rounded-full whitespace-nowrap flex-shrink-0">
+                  <Zap className="w-3 h-3 inline mr-1" />
+                  Featured
+                </span>
+              )}
+            </div>
+            
+            <div className="mb-4">
+              <div className="text-xl font-bold text-gray-900 mb-1" title={job.budget_display}>
+                {job.budget_display}
+              </div>
+              <div className="text-sm text-gray-500 capitalize mb-3">
+                {job.budget_type} budget
+              </div>
+            </div>
+            
+            <div className="flex items-center text-gray-600 text-sm mb-3">
+              <Users className="w-4 h-4 mr-2 text-gray-400 flex-shrink-0" />
+              <span className="truncate">{job.client_name}</span>
+            </div>
+            
+            <div className="flex flex-wrap gap-1.5 mb-4">
+              {job.skills_required.slice(0, 3).map((skill, index) => (
+                <span 
+                  key={index}
+                  className="px-2 py-1 bg-gray-50 text-gray-700 text-xs font-medium rounded border border-gray-200"
+                  title={skill}
+                >
+                  {skill.trim().length > 12 ? skill.trim().substring(0, 12) + '...' : skill.trim()}
+                </span>
+              ))}
+            </div>
+            
+            <div className="flex items-center justify-between text-sm text-gray-500 mb-4">
+              <span className="flex items-center">
+                <FileText className="w-3 h-3 mr-1" />
+                {job.proposals_count}
               </span>
-            )}
+              <span className="flex items-center">
+                <Clock className="w-3 h-3 mr-1" />
+                {job.posted_time}
+              </span>
+            </div>
           </div>
-          <div className="flex items-center text-gray-600 text-sm mb-4 flex-wrap">
-            <Users className="w-4 h-4 mr-1 flex-shrink-0" />
-            <span className="truncate mr-4 min-w-0">{job.client_name}</span>
-            <Target className="w-4 h-4 mr-1 flex-shrink-0" />
-            <span className="capitalize whitespace-nowrap">{job.experience_level || 'Intermediate'}</span>
+          
+          <div className="flex gap-2">
+            <button 
+              onClick={handleApply}
+              className="flex-1 btn-primary py-2.5 text-xs flex items-center justify-center"
+            >
+              <Briefcase className="w-3 h-3 mr-1" />
+              Apply
+            </button>
+            <button 
+              onClick={handleSave}
+              className="px-3 py-2.5 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 text-sm"
+              title="Save job"
+            >
+              <Star className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      <div className={`bg-white rounded-xl p-5 shadow-sm border ${job.is_featured ? 'border-primary-200 border-2' : 'border-gray-100'} hover:shadow-md transition-all duration-200`}>
+        <div className="flex justify-between items-start mb-4">
+          <div className="flex-1 min-w-0 pr-4">
+            <div className="flex items-center gap-2 mb-2">
+              <h3 className="text-lg font-semibold text-gray-900 truncate" title={job.title}>
+                {job.title}
+              </h3>
+              {job.is_featured && (
+                <span className="px-2 py-1 bg-primary-50 text-primary-700 text-xs font-medium rounded-full whitespace-nowrap flex-shrink-0">
+                  <Zap className="w-3 h-3 inline mr-1" />
+                  Featured
+                </span>
+              )}
+            </div>
+            
+            <div className="flex items-center text-gray-600 text-sm mb-2">
+              <Users className="w-4 h-4 mr-2 text-gray-400 flex-shrink-0" />
+              <span className="truncate mr-4">{job.client_name}</span>
+            </div>
+            
+            <div className="flex items-center text-gray-600 text-sm mb-4">
+              <Target className="w-4 h-4 mr-2 text-gray-400" />
+              <span className="capitalize">{job.experience_level || 'Intermediate'}</span>
+              <span className="mx-2">•</span>
+              <MapPin className="w-4 h-4 mr-2 text-gray-400" />
+              <span className="truncate">{job.location || 'Remote'}</span>
+            </div>
+            
+            <div className="flex flex-wrap gap-2 mb-4">
+              {job.skills_required.slice(0, 4).map((skill, index) => (
+                <span 
+                  key={index}
+                  className="px-3 py-1 bg-gray-50 text-gray-700 text-xs font-medium rounded-lg border border-gray-200"
+                  title={skill}
+                >
+                  {skill.trim().length > 15 ? skill.trim().substring(0, 15) + '...' : skill.trim()}
+                </span>
+              ))}
+              {job.skills_required.length > 4 && (
+                <span className="px-3 py-1 bg-gray-50 text-gray-500 text-xs font-medium rounded-lg border border-gray-200">
+                  +{job.skills_required.length - 4} more
+                </span>
+              )}
+            </div>
+          </div>
+          
+          {/* Right side - Price and stats */}
+          <div className="text-right flex-shrink-0 min-w-[120px]">
+            <div className="text-xl font-bold text-gray-900 mb-1" title={job.budget_display}>
+              {job.budget_display}
+            </div>
+            <div className="text-sm text-gray-500 capitalize mb-3">
+              {job.budget_type} budget
+            </div>
+            
+            <div className="flex items-center justify-end text-sm text-gray-500 mb-1">
+              <Clock className="w-3 h-3 mr-1" />
+              {job.posted_time}
+            </div>
+            <div className="flex items-center justify-end text-sm text-gray-500">
+              <FileText className="w-3 h-3 mr-1" />
+              {job.proposals_count} proposals
+            </div>
           </div>
         </div>
         
-        {/* Right content - price - Added min-width constraint */}
-        <div className="text-right flex-shrink-0 min-w-[120px] max-w-[200px]"> {/* Added min-width and max-width */}
-          <div className="text-xl font-bold text-gray-900 truncate" title={job.budget_display}>
-            {job.budget_display}
-          </div>
-          <div className="text-sm text-gray-500 capitalize truncate">
-            {job.budget_type} budget
-          </div>
+        {/* Description (if available) */}
+        {job.description && (
+          <p className="text-gray-600 text-sm mb-4 line-clamp-2">
+            {job.description.length > 120 ? job.description.substring(0, 120) + '...' : job.description}
+          </p>
+        )}
+        
+        <div className="flex gap-2">
+          <button 
+            onClick={handleApply}
+            className="flex-1 btn-primary py-2.5 text-sm flex items-center justify-center"
+          >
+            <Briefcase className="w-4 h-4 mr-2" />
+            Apply Now
+          </button>
+          <button 
+            onClick={handleSave}
+            className="px-4 py-2.5 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 text-sm flex items-center justify-center"
+            title="Save job"
+          >
+            <Star className="w-4 h-4" />
+          </button>
+          <button 
+            onClick={() => window.location.href = `/jobs/${job.id}`}
+            className="px-4 py-2.5 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 text-sm flex items-center justify-center"
+            title="View details"
+          >
+            <ArrowRight className="w-4 h-4" />
+          </button>
         </div>
       </div>
-      
-      <div className="mb-4">
-        <div className="flex flex-wrap gap-2 mb-3">
-          {job.skills_required.slice(0, 3).map((skill, index) => (
-            <span 
-              key={index}
-              className="px-3 py-1 bg-gray-100 text-gray-700 text-sm font-medium rounded-full whitespace-nowrap"
-            >
-              {skill.trim()}
-            </span>
-          ))}
-          {job.skills_required.length > 3 && (
-            <span className="px-3 py-1 bg-gray-100 text-gray-500 text-sm font-medium rounded-full whitespace-nowrap">
-              +{job.skills_required.length - 3} more
-            </span>
-          )}
-        </div>
-        <div className="flex items-center justify-between text-sm text-gray-500 flex-wrap gap-2">
-          <span className="flex items-center whitespace-nowrap">
-            <Clock className="w-4 h-4 mr-1 flex-shrink-0" />
-            {job.posted_time}
-          </span>
-          <span className="flex items-center whitespace-nowrap">
-            <FileText className="w-4 h-4 mr-1 flex-shrink-0" />
-            {job.proposals_count} proposals
-          </span>
-        </div>
-      </div>
-      
-      <div className="flex gap-3">
-        <button 
-          onClick={handleApply}
-          className="flex-1 btn-primary py-2 text-sm flex items-center justify-center"
-        >
-          <Briefcase className="w-4 h-4 mr-2" />
-          Apply Now
-        </button>
-        <button 
-          onClick={handleSave}
-          className="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 text-sm flex items-center flex-shrink-0"
-        >
-          <Star className="w-4 h-4" />
-        </button>
-      </div>
-    </div>
-  );
-};
+    );
+  };
 
   const ProgressRing = ({ percentage, size = 120, strokeWidth = 8 }) => {
     const radius = (size - strokeWidth) / 2;
@@ -460,6 +565,54 @@ const DashboardPage = () => {
       </div>
       <button className="mt-4 w-full py-2 bg-white text-blue-600 border border-blue-600 rounded-lg hover:bg-blue-50 text-sm font-medium transition-colors">
         Join Meeting
+      </button>
+    </div>
+  );
+
+  // Pagination component
+  const JobPagination = () => (
+    <div className="flex items-center justify-center mt-6">
+      <button
+        onClick={() => setCurrentJobPage(prev => Math.max(prev - 1, 1))}
+        disabled={currentJobPage === 1}
+        className="px-3 py-2 mx-1 text-sm font-medium text-gray-500 bg-white border border-gray-300 rounded-lg hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed"
+      >
+        Previous
+      </button>
+      
+      {Array.from({ length: Math.min(totalJobPages, 5) }, (_, i) => {
+        let pageNum;
+        if (totalJobPages <= 5) {
+          pageNum = i + 1;
+        } else if (currentJobPage <= 3) {
+          pageNum = i + 1;
+        } else if (currentJobPage >= totalJobPages - 2) {
+          pageNum = totalJobPages - 4 + i;
+        } else {
+          pageNum = currentJobPage - 2 + i;
+        }
+        
+        return (
+          <button
+            key={pageNum}
+            onClick={() => setCurrentJobPage(pageNum)}
+            className={`px-3 py-2 mx-1 text-sm font-medium rounded-lg ${
+              currentJobPage === pageNum
+                ? 'bg-primary-600 text-white'
+                : 'text-gray-700 bg-white border border-gray-300 hover:bg-gray-100'
+            }`}
+          >
+            {pageNum}
+          </button>
+        );
+      })}
+      
+      <button
+        onClick={() => setCurrentJobPage(prev => Math.min(prev + 1, totalJobPages))}
+        disabled={currentJobPage === totalJobPages}
+        className="px-3 py-2 mx-1 text-sm font-medium text-gray-500 bg-white border border-gray-300 rounded-lg hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed"
+      >
+        Next
       </button>
     </div>
   );
@@ -692,26 +845,69 @@ const DashboardPage = () => {
 
         {/* Right Column - Jobs & Interviews */}
         <div className="space-y-8">
-          {/* Recommended Jobs */}
+          {/* Recommended Jobs with Tabs and Pagination */}
           <div className="bg-white rounded-xl p-6 shadow-sm border border-gray-100">
             <div className="flex items-center justify-between mb-6">
-              <h2 className="text-xl font-bold text-gray-900">Recommended Jobs</h2>
-              <Link 
-                to="/find-work" 
-                className="text-primary-600 hover:text-primary-700 text-sm font-medium flex items-center"
-              >
-                View All
-                <ArrowRight className="w-4 h-4 ml-1" />
-              </Link>
+              <div>
+                <h2 className="text-xl font-bold text-gray-900">Recommended Jobs</h2>
+                <p className="text-sm text-gray-500 mt-1">
+                  Showing {currentJobs.length} of {recommendedJobs.length} jobs
+                </p>
+              </div>
+              <div className="flex items-center gap-3">
+                <div className="flex border border-gray-300 rounded-lg overflow-hidden">
+                  <button
+                    onClick={() => setJobViewMode('list')}
+                    className={`p-2 ${jobViewMode === 'list' ? 'bg-gray-100' : 'bg-white'}`}
+                    title="List view"
+                  >
+                    <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+                      <path fillRule="evenodd" d="M3 5a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zM3 10a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zM3 15a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1z" clipRule="evenodd" />
+                    </svg>
+                  </button>
+                  <button
+                    onClick={() => setJobViewMode('grid')}
+                    className={`p-2 ${jobViewMode === 'grid' ? 'bg-gray-100' : 'bg-white'}`}
+                    title="Grid view"
+                  >
+                    <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+                      <path d="M5 3a2 2 0 00-2 2v2a2 2 0 002 2h2a2 2 0 002-2V5a2 2 0 00-2-2H5zM5 11a2 2 0 00-2 2v2a2 2 0 002 2h2a2 2 0 002-2v-2a2 2 0 00-2-2H5zM11 5a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V5zM11 13a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z" />
+                    </svg>
+                  </button>
+                </div>
+                <Link 
+                  to="/find-work" 
+                  className="text-primary-600 hover:text-primary-700 text-sm font-medium flex items-center"
+                >
+                  View All
+                  <ArrowRight className="w-4 h-4 ml-1" />
+                </Link>
+              </div>
             </div>
             
-            <div className="space-y-6">
-              {recommendedJobs.length > 0 ? (
-                recommendedJobs.map((job) => (
-                  <JobCard key={job.id} job={job} />
+            {/* Job Filters/Tabs */}
+            <div className="flex border-b border-gray-200 mb-6">
+              <button className="px-4 py-2 text-sm font-medium text-primary-600 border-b-2 border-primary-600">
+                Best Matches ({recommendedJobs.length})
+              </button>
+              <button className="px-4 py-2 text-sm font-medium text-gray-500 hover:text-gray-700">
+                Saved Jobs
+              </button>
+              <button className="px-4 py-2 text-sm font-medium text-gray-500 hover:text-gray-700">
+                Recent
+              </button>
+            </div>
+            
+            {/* Job Listings */}
+            <div className={jobViewMode === 'grid' ? 'grid grid-cols-1 md:grid-cols-2 gap-4' : 'space-y-4'}>
+              {currentJobs.length > 0 ? (
+                currentJobs.map((job) => (
+                  <div key={job.id} className={jobViewMode === 'grid' ? 'h-full' : ''}>
+                    <JobCard job={job} compact={jobViewMode === 'grid'} />
+                  </div>
                 ))
               ) : (
-                <div className="text-center py-8">
+                <div className="text-center py-8 col-span-2">
                   <Briefcase className="w-12 h-12 text-gray-300 mx-auto mb-4" />
                   <p className="text-gray-500">No job recommendations yet</p>
                   <p className="text-gray-400 text-sm mt-1">Complete your profile for better matches</p>
@@ -723,6 +919,9 @@ const DashboardPage = () => {
                 </div>
               )}
             </div>
+            
+            {/* Pagination Controls */}
+            {recommendedJobs.length > jobsPerPage && <JobPagination />}
           </div>
 
           {/* Upcoming Interviews */}

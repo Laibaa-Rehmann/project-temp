@@ -64,6 +64,7 @@ class User(Base):
     hashed_password = Column(String, nullable=False)
     user_type = Column(String, nullable=False)  # 'freelancer' or 'client'
     full_name = Column(String)
+    company_name = Column(String)
     profile_title = Column(String)
     description = Column(Text)
     skills = Column(String)  # Comma-separated skills
@@ -86,6 +87,7 @@ class Job(Base):
     skills_required = Column(String) 
     location = Column(String, default="Remote") # Comma-separated
     duration = Column(String)
+    category = Column(String(100), nullable=True)
     experience_level = Column(String)  # 'entry', 'intermediate', 'expert'
     client_id = Column(Integer, ForeignKey("users.id"))
     status = Column(String, default='open')  # 'open', 'in_progress', 'completed', 'cancelled'
@@ -142,6 +144,7 @@ class UserResponse(BaseModel):
     email: str
     user_type: str
     full_name: Optional[str]
+    company_name: Optional[str] = None 
     profile_title: Optional[str]
     description: Optional[str]
     skills: Optional[str]
@@ -592,270 +595,578 @@ def get_upcoming_interviews(current_user: User = Depends(get_current_active_user
         ]
     }
 
-# # ================ NEW ENDPOINTS FOR FIND WORK PAGE ================
-# class JobResponse(BaseModel):
-#     id: int
-#     title: str
-#     description: Optional[str]
-#     budget_type: str
-#     budget: Optional[float]
-#     budget_min: Optional[float]
-#     budget_max: Optional[float]
-#     skills_required: Optional[List[str]]
-#     location: Optional[str]
-#     experience_level: Optional[str]
-#     is_featured: bool
-#     posted_at: Optional[str]
-#     proposals_count: int
-#     client: Optional[dict]
-    
-#     class Config:
-#         from_attributes = True
+# # ================ NEW ENDPOINTS FO
+# ================ JOB ENDPOINTS ================
 
-# class CategoryResponse(BaseModel):
-#     id: int
-#     name: str
-#     job_count: int
-    
-#     class Config:
-#         from_attributes = True
+# Pydantic schemas for jobs
+class JobCreate(BaseModel):
+    title: str
+    description: str
+    budget_type: str  # 'fixed' or 'hourly'
+    budget_min: float
+    budget_max: float
+    skills_required: str  # Comma-separated
+    location: str = "Remote"
+    duration: str
+    experience_level: str = "intermediate"  # 'entry', 'intermediate', 'expert'
+    category: Optional[str] = None
+    is_featured: bool = False
 
-# # Add this route for getting all jobs
-# @app.get("/api/jobs", response_model=dict)
-# def get_jobs(
-#     search: Optional[str] = None,
-#     min_budget: Optional[float] = None,
-#     max_budget: Optional[float] = None,
-#     skills: Optional[str] = None,
-#     category: Optional[str] = None,
-#     experience_level: Optional[str] = None,
-#     job_type: Optional[str] = None,
-#     location: Optional[str] = None,
-#     page: int = 1,
-#     limit: int = 10,
-#     db: Session = Depends(get_db),
-#     current_user: User = Depends(get_current_active_user)
-# ):
-#     """Get all available jobs with optional filters"""
+class JobResponse(BaseModel):
+    id: int
+    title: str
+    description: str
+    budget_type: str
+    budget_min: float
+    budget_max: float
+    budget_display: str
+    skills_required: List[str]
+    location: str
+    duration: str
+    experience_level: str
+    client_id: int
+    status: str
+    is_featured: bool
+    created_at: datetime
+    proposals_count: int
+    client: Optional[dict] = None
     
-#     # Start with base query
-#     query = db.query(Job).filter(Job.status == 'open')
+    class Config:
+        from_attributes = True
+
+class JobListResponse(BaseModel):
+    jobs: List[JobResponse]
+    total: int
+    page: int
+    limit: int
+    total_pages: int
+    saved_jobs: List[int] = []
+
+class CategoryResponse(BaseModel):
+    id: str
+    name: str
+    job_count: int
     
-#     # Apply filters
-#     if search:
-#         query = query.filter(
-#             (Job.title.ilike(f"%{search}%")) | 
-#             (Job.description.ilike(f"%{search}%"))
-#         )
+    class Config:
+        from_attributes = True
+
+class ApplicationCreate(BaseModel):
+    cover_letter: str
+    proposed_rate: Optional[float] = None
+    estimated_days: Optional[int] = None
+
+# Main jobs endpoint with filtering
+@app.get("/api/jobs", response_model=JobListResponse)
+def get_jobs(
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+    search: Optional[str] = None,
+    min_budget: Optional[float] = None,
+    max_budget: Optional[float] = None,
+    skills: Optional[str] = None,
+    category: Optional[str] = None,
+    experience_level: Optional[str] = None,
+    job_type: Optional[str] = None,
+    location: Optional[str] = None,
+    page: int = 1,
+    limit: int = 10
+):
+    """Get all jobs with filtering and pagination"""
     
-#     if min_budget is not None:
-#         query = query.filter(Job.budget_min >= min_budget)
-    
-#     if max_budget is not None:
-#         query = query.filter(Job.budget_max <= max_budget)
-    
-#     if skills:
-#         skills_list = [skill.strip() for skill in skills.split(",")]
-#         for skill in skills_list:
-#             query = query.filter(Job.skills_required.ilike(f"%{skill}%"))
-    
-#     if experience_level and experience_level != 'all':
-#         query = query.filter(Job.experience_level == experience_level)
-    
-#     if job_type and job_type != 'all':
-#         query = query.filter(Job.budget_type == job_type)
-    
-#     if location and location != 'all':
-#         if location == 'remote':
-#             query = query.filter(Job.location.ilike("%remote%"))
-#         # Add more location filters as needed
-    
-#     # Get total count before pagination
-#     total = query.count()
-    
-#     # Apply pagination
-#     offset = (page - 1) * limit
-#     jobs = query.order_by(Job.created_at.desc()).offset(offset).limit(limit).all()
-    
-#     # Format response
-#     job_list = []
-#     for job in jobs:
-#         # Get proposals count
-#         proposals_count = db.query(Proposal).filter(Proposal.job_id == job.id).count()
+    try:
+        print("=" * 50)
+        print("🔄 GET /api/jobs called")
+        print(f"👤 User: {current_user.username} (ID: {current_user.id})")
+        print(f"📋 Filters: page={page}, limit={limit}, search='{search}'")
         
-#         # Get client info
-#         client_info = {}
-#         if job.client:
-#             client_info = {
-#                 "company_name": job.client.company_name if hasattr(job.client, 'company_name') else None,
-#                 "full_name": job.client.full_name,
-#                 "username": job.client.username,
-#                 "rating": 4.5,  # You can calculate this based on reviews
-#                 "total_spent": 10000,  # You can calculate this from contracts
-#             }
+        # Start building query
+        query = db.query(Job).filter(Job.status == 'open')
         
-#         job_list.append({
-#             "id": job.id,
-#             "title": job.title,
-#             "description": job.description,
-#             "budget_type": job.budget_type,
-#             "budget": job.budget_min if job.budget_type == 'fixed' else job.budget_min,  # Use min for hourly rate
-#             "budget_min": job.budget_min,
-#             "budget_max": job.budget_max,
-#             "skills_required": job.skills_required.split(",") if job.skills_required else [],
-#             "location": "Remote",  # Add location field to Job model if needed
-#             "experience_level": job.experience_level,
-#             "is_featured": job.is_featured,
-#             "posted_at": job.created_at.isoformat() if job.created_at else None,
-#             "proposals_count": proposals_count,
-#             "client": client_info
-#         })
-    
-#     return {
-#         "jobs": job_list,
-#         "total": total,
-#         "page": page,
-#         "limit": limit,
-#         "total_pages": (total + limit - 1) // limit
-#     }
+        # Debug: Check how many jobs are in the database
+        all_jobs_count = db.query(Job).count()
+        open_jobs_count = db.query(Job).filter(Job.status == 'open').count()
+        print(f"📊 Database stats - Total jobs: {all_jobs_count}, Open jobs: {open_jobs_count}")
+        
+        if open_jobs_count == 0:
+            print("⚠️  WARNING: No open jobs found in database!")
+            # List all jobs to see what's there
+            all_jobs = db.query(Job).all()
+            for job in all_jobs:
+                print(f"   Job ID {job.id}: '{job.title}' - Status: '{job.status}'")
+        
+        # Apply filters
+        if search:
+            search_term = f"%{search}%"
+            query = query.filter(
+                (Job.title.ilike(search_term)) | 
+                (Job.description.ilike(search_term))
+            )
+            print(f"🔍 Applied search filter: '{search}'")
+        
+        # Get total count before pagination
+        total = query.count()
+        print(f"📊 Jobs after filters: {total}")
+        
+        # Apply pagination
+        offset = (page - 1) * limit
+        jobs = query.order_by(Job.created_at.desc()).offset(offset).limit(limit).all()
+        
+        print(f"📄 Fetched {len(jobs)} jobs from database")
+        
+        # Debug each job
+        for i, job in enumerate(jobs):
+            print(f"   Job {i+1}: ID={job.id}, Title='{job.title}', Status='{job.status}'")
+            print(f"      Budget: ${job.budget_min}-${job.budget_max} ({job.budget_type})")
+            print(f"      Client ID: {job.client_id}")
+            if job.client:
+                print(f"      Client: {job.client.full_name or job.client.username}")
+        
+        # Format job responses
+        job_responses = []
+        for job in jobs:
+            # Get proposals count
+            proposals_count = db.query(Proposal).filter(Proposal.job_id == job.id).count()
+            
+            # Format budget display
+            if job.budget_type == 'fixed':
+                budget_display = f"${job.budget_min:,.0f} - ${job.budget_max:,.0f}"
+            else:
+                budget_display = f"${job.budget_min}/hr - ${job.budget_max}/hr"
+            
+            # Get client info
+            client_info = None
+            if job.client:
+                client_info = {
+                    'id': job.client.id,
+                    'full_name': job.client.full_name or job.client.username,
+                    'company_name': getattr(job.client, 'company_name', None),
+                    'rating': 4.5,
+                    'total_spent': 0
+                }
+                print(f"✅ Client found for job {job.id}: {client_info['full_name']}")
+            else:
+                print(f"⚠️  No client found for job {job.id} (client_id: {job.client_id})")
+            
+            job_response = JobResponse(
+                id=job.id,
+                title=job.title,
+                description=job.description,
+                budget_type=job.budget_type,
+                budget_min=job.budget_min,
+                budget_max=job.budget_max,
+                budget_display=budget_display,
+                skills_required=job.skills_required.split(",") if job.skills_required else ["General"],
+                location=job.location,
+                duration=job.duration,
+                experience_level=job.experience_level,
+                category=job.category,
+                client_id=job.client_id,
+                status=job.status,
+                is_featured=job.is_featured,
+                created_at=job.created_at,
+                proposals_count=proposals_count,
+                client=client_info
+            )
+            job_responses.append(job_response)
+        
+        # Get saved jobs for current user
+        saved_jobs = []
+        
+        response = JobListResponse(
+            jobs=job_responses,
+            total=total,
+            page=page,
+            limit=limit,
+            total_pages=(total + limit - 1) // limit if limit > 0 else 1,
+            saved_jobs=saved_jobs
+        )
+        
+        print(f"✅ Successfully returning {len(job_responses)} jobs")
+        print("=" * 50)
+        return response
+        
+    except Exception as e:
+        print(f"❌ ERROR in get_jobs: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Error fetching jobs: {str(e)}")
+        print(f"Error fetching jobs: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error fetching jobs: {str(e)}")
 
-# @app.get("/api/jobs/categories", response_model=List[CategoryResponse])
-# def get_job_categories(db: Session = Depends(get_db)):
-#     """Get job categories with counts"""
-#     # For now, return static categories. You can make this dynamic later
-#     categories = [
-#         {"id": 1, "name": "Web Development", "job_count": 45},
-#         {"id": 2, "name": "Mobile Development", "job_count": 28},
-#         {"id": 3, "name": "Design", "job_count": 32},
-#         {"id": 4, "name": "Writing", "job_count": 19},
-#         {"id": 5, "name": "Marketing", "job_count": 26},
-#         {"id": 6, "name": "Data Science", "job_count": 22},
-#         {"id": 7, "name": "Virtual Assistant", "job_count": 15},
-#     ]
-#     return categories
+@app.get("/api/jobs/categories", response_model=List[CategoryResponse])
+def get_categories(
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Get all job categories with counts"""
+    try:
+        # Get all unique categories from jobs
+        categories_query = db.query(
+            Job.category,
+            db.func.count(Job.id).label('job_count')
+        ).filter(Job.status == 'open')
+        
+        # If category field is None or empty, filter it out
+        categories_query = categories_query.filter(Job.category.isnot(None))
+        categories_query = categories_query.filter(Job.category != '')
+        
+        categories_result = categories_query.group_by(Job.category).all()
+        
+        categories = []
+        for cat_name, job_count in categories_result:
+            if cat_name:
+                categories.append(CategoryResponse(
+                    id=cat_name.lower().replace(' ', '-'),
+                    name=cat_name,
+                    job_count=job_count
+                ))
+        
+        # Add common categories if they don't exist
+        common_categories = ['Web Development', 'Mobile Development', 'Design', 'Writing', 'Marketing']
+        for common_cat in common_categories:
+            if not any(cat.name == common_cat for cat in categories):
+                categories.append(CategoryResponse(
+                    id=common_cat.lower().replace(' ', '-'),
+                    name=common_cat,
+                    job_count=0
+                ))
+        
+        return categories
+        
+    except Exception as e:
+        print(f"Error fetching categories: {str(e)}")
+        # Return default categories on error
+        return [
+            CategoryResponse(id='web-development', name='Web Development', job_count=0),
+            CategoryResponse(id='mobile-development', name='Mobile Development', job_count=0),
+            CategoryResponse(id='design', name='Design', job_count=0),
+            CategoryResponse(id='writing', name='Writing', job_count=0),
+            CategoryResponse(id='marketing', name='Marketing', job_count=0),
+        ]
 
-# @app.get("/api/jobs/{job_id}", response_model=JobResponse)
-# def get_job_details(
-#     job_id: int,
-#     db: Session = Depends(get_db),
-#     current_user: User = Depends(get_current_active_user)
-# ):
-#     """Get detailed information about a specific job"""
-#     job = db.query(Job).filter(Job.id == job_id).first()
-    
-#     if not job:
-#         raise HTTPException(status_code=404, detail="Job not found")
-    
-#     # Check if user has already applied
-#     has_applied = db.query(Proposal).filter(
-#         Proposal.job_id == job_id,
-#         Proposal.freelancer_id == current_user.id
-#     ).first() is not None
-    
-#     # Get proposals count
-#     proposals_count = db.query(Proposal).filter(Proposal.job_id == job_id).count()
-    
-#     # Get client info
-#     client_info = {}
-#     if job.client:
-#         client_info = {
-#             "id": job.client.id,
-#             "company_name": job.client.company_name if hasattr(job.client, 'company_name') else None,
-#             "full_name": job.client.full_name,
-#             "username": job.client.username,
-#             "rating": 4.5,
-#             "total_spent": 10000,
-#             "description": job.client.description,
-#             "verified": job.client.verified,
-#             "member_since": job.client.created_at.year if job.client.created_at else None
-#         }
-    
-#     return {
-#         "id": job.id,
-#         "title": job.title,
-#         "description": job.description,
-#         "budget_type": job.budget_type,
-#         "budget": job.budget_min if job.budget_type == 'hourly' else job.budget_min,
-#         "budget_min": job.budget_min,
-#         "budget_max": job.budget_max,
-#         "skills_required": job.skills_required.split(",") if job.skills_required else [],
-#         "location": "Remote",  # Add to Job model
-#         "experience_level": job.experience_level,
-#         "is_featured": job.is_featured,
-#         "posted_at": job.created_at.isoformat() if job.created_at else None,
-#         "proposals_count": proposals_count,
-#         "client": client_info,
-#         "has_applied": has_applied,
-#         "duration": job.duration,
-#         "status": job.status
-#     }
+@app.get("/api/jobs/{job_id}", response_model=JobResponse)
+def get_job(
+    job_id: int,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Get a single job by ID"""
+    try:
+        job = db.query(Job).filter(Job.id == job_id).first()
+        
+        if not job:
+            raise HTTPException(status_code=404, detail="Job not found")
+        
+        # Get proposals count
+        proposals_count = db.query(Proposal).filter(Proposal.job_id == job.id).count()
+        
+        # Format budget display
+        if job.budget_type == 'fixed':
+            budget_display = f"${job.budget_min:,.0f} - ${job.budget_max:,.0f}"
+        else:
+            budget_display = f"${job.budget_min}/hr - ${job.budget_max}/hr"
+        
+        # Get client info
+        client_info = None
+        if job.client:
+            client_info = {
+                'id': job.client.id,
+                'full_name': job.client.full_name,
+                'company_name': job.client.company_name if hasattr(job.client, 'company_name') else None,
+                'rating': 4.5,
+                'total_spent': 0
+            }
+        
+        return JobResponse(
+            id=job.id,
+            title=job.title,
+            description=job.description,
+            budget_type=job.budget_type,
+            budget_min=job.budget_min,
+            budget_max=job.budget_max,
+            budget_display=budget_display,
+            skills_required=job.skills_required.split(",") if job.skills_required else ["General"],
+            location=job.location,
+            duration=job.duration,
+            experience_level=job.experience_level,
+            category=job.category,
+            client_id=job.client_id,
+            status=job.status,
+            is_featured=job.is_featured,
+            created_at=job.created_at,
+            proposals_count=proposals_count,
+            client=client_info
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error fetching job {job_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error fetching job: {str(e)}")
 
-# @app.post("/api/jobs/{job_id}/apply")
-# def apply_to_job(
-#     job_id: int,
-#     db: Session = Depends(get_db),
-#     current_user: User = Depends(get_current_active_user)
-# ):
-#     """Apply to a job"""
-#     # Check if job exists
-#     job = db.query(Job).filter(Job.id == job_id).first()
-#     if not job:
-#         raise HTTPException(status_code=404, detail="Job not found")
-    
-#     # Check if job is open
-#     if job.status != 'open':
-#         raise HTTPException(status_code=400, detail="Job is not accepting applications")
-    
-#     # Check if user is the client who posted the job
-#     if job.client_id == current_user.id:
-#         raise HTTPException(status_code=400, detail="You cannot apply to your own job")
-    
-#     # Check if user has already applied
-#     existing_proposal = db.query(Proposal).filter(
-#         Proposal.job_id == job_id,
-#         Proposal.freelancer_id == current_user.id
-#     ).first()
-    
-#     if existing_proposal:
-#         raise HTTPException(status_code=400, detail="You have already applied to this job")
-    
-#     # Create proposal
-#     new_proposal = Proposal(
-#         freelancer_id=current_user.id,
-#         job_id=job_id,
-#         cover_letter="I'm interested in this position and would like to apply.",
-#         bid_amount=job.budget_min if job.budget_type == 'fixed' else None,
-#         status="pending",
-#         submitted_at=datetime.utcnow()
-#     )
-    
-#     db.add(new_proposal)
-#     db.commit()
-#     db.refresh(new_proposal)
-    
-#     return {"message": "Successfully applied to job", "proposal_id": new_proposal.id}
+@app.post("/api/jobs/{job_id}/apply")
+def apply_to_job(
+    job_id: int,
+    application: ApplicationCreate,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Apply to a job"""
+    try:
+        # Check if user is a freelancer
+        if current_user.user_type != 'freelancer':
+            raise HTTPException(status_code=403, detail="Only freelancers can apply to jobs")
+        
+        # Get the job
+        job = db.query(Job).filter(Job.id == job_id).first()
+        if not job:
+            raise HTTPException(status_code=404, detail="Job not found")
+        
+        # Check if job is open
+        if job.status != 'open':
+            raise HTTPException(status_code=400, detail="Job is not open for applications")
+        
+        # Check if user already applied
+        existing_proposal = db.query(Proposal).filter(
+            Proposal.job_id == job_id,
+            Proposal.freelancer_id == current_user.id
+        ).first()
+        
+        if existing_proposal:
+            raise HTTPException(status_code=400, detail="You have already applied to this job")
+        
+        # Calculate bid amount if not provided
+        bid_amount = application.proposed_rate
+        if not bid_amount:
+            if job.budget_type == 'fixed':
+                bid_amount = job.budget_min  # Use min budget as default
+            else:
+                bid_amount = job.budget_min  # Use min hourly rate as default
+        
+        # Create proposal
+        proposal = Proposal(
+            freelancer_id=current_user.id,
+            job_id=job_id,
+            cover_letter=application.cover_letter,
+            bid_amount=bid_amount,
+            estimated_days=application.estimated_days or 30,
+            status='pending',
+            submitted_at=datetime.utcnow()
+        )
+        
+        db.add(proposal)
+        db.commit()
+        db.refresh(proposal)
+        
+        return {
+            "message": "Application submitted successfully",
+            "proposal_id": proposal.id,
+            "status": proposal.status
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        print(f"Error applying to job {job_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error applying to job: {str(e)}")
 
-# @app.post("/api/jobs/{job_id}/save")
-# def save_job(
-#     job_id: int,
-#     db: Session = Depends(get_db),
-#     current_user: User = Depends(get_current_active_user)
-# ):
-#     """Save a job to favorites"""
-#     # You'll need to create a SavedJob model for this
-#     # For now, return success
-#     return {"message": "Job saved successfully"}
+@app.get("/api/jobs/{job_id}/check-application")
+def check_application(
+    job_id: int,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Check if user has already applied to a job"""
+    try:
+        existing_proposal = db.query(Proposal).filter(
+            Proposal.job_id == job_id,
+            Proposal.freelancer_id == current_user.id
+        ).first()
+        
+        return {
+            "applied": existing_proposal is not None,
+            "proposal": {
+                "id": existing_proposal.id,
+                "status": existing_proposal.status,
+                "submitted_at": existing_proposal.submitted_at
+            } if existing_proposal else None
+        }
+        
+    except Exception as e:
+        print(f"Error checking application: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error checking application: {str(e)}")
 
-# @app.post("/api/jobs/{job_id}/unsave")
-# def unsave_job(
-#     job_id: int,
-#     db: Session = Depends(get_db),
-#     current_user: User = Depends(get_current_active_user)
-# ):
-#     """Remove a job from saved"""
-#     return {"message": "Job removed from saved"}
+@app.post("/api/jobs/{job_id}/save")
+def save_job(
+    job_id: int,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Save a job to user's saved jobs"""
+    # For now, return success - implement saved jobs table later
+    return {
+        "message": "Job saved successfully",
+        "job_id": job_id,
+        "saved": True
+    }
 
-# # Add this before if __name__ == "__main__":
+@app.post("/api/jobs/{job_id}/unsave")
+def unsave_job(
+    job_id: int,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Remove a job from user's saved jobs"""
+    # For now, return success - implement saved jobs table later
+    return {
+        "message": "Job removed from saved list",
+        "job_id": job_id,
+        "saved": False
+    }
+
+@app.get("/api/jobs/saved")
+def get_saved_jobs(
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Get user's saved jobs"""
+    # For now, return empty list - implement saved jobs table later
+    return {
+        "saved_jobs": [],
+        "total": 0
+    }
+
+# Create sample jobs endpoint (for testing)
+@app.post("/api/jobs/create-sample")
+def create_sample_jobs(
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Create sample jobs for testing"""
+    try:
+        # Check if user is a client
+        if current_user.user_type != 'client':
+            raise HTTPException(status_code=403, detail="Only clients can create jobs")
+        
+        sample_jobs = [
+            {
+                "title": "Senior React Developer Needed",
+                "description": "Looking for an experienced React developer to build a modern dashboard interface with TypeScript and Tailwind CSS. Must have 3+ years experience with React and state management libraries.",
+                "budget_type": "fixed",
+                "budget_min": 5000,
+                "budget_max": 8000,
+                "skills_required": "React,TypeScript,Tailwind CSS,Redux,Next.js",
+                "location": "Remote",
+                "duration": "2 months",
+                "experience_level": "expert",
+                "category": "Web Development",
+                "is_featured": True
+            },
+            {
+                "title": "Full Stack Developer (Node.js + React)",
+                "description": "Build a complete e-commerce platform with payment integration and admin dashboard. Experience with MongoDB and Express required. Knowledge of AWS services is a plus.",
+                "budget_type": "hourly",
+                "budget_min": 35,
+                "budget_max": 55,
+                "skills_required": "Node.js,React,MongoDB,Express,Stripe API",
+                "location": "New York, NY",
+                "duration": "3 months",
+                "experience_level": "intermediate",
+                "category": "Web Development",
+                "is_featured": False
+            },
+            {
+                "title": "UI/UX Designer for Mobile App",
+                "description": "Design a beautiful and intuitive mobile app interface for a fitness tracking application. Must have experience with Figma and mobile design patterns. Portfolio required.",
+                "budget_type": "fixed",
+                "budget_min": 3000,
+                "budget_max": 5000,
+                "skills_required": "Figma,UI Design,UX Research,Mobile Design,Prototyping",
+                "location": "Remote",
+                "duration": "1 month",
+                "experience_level": "intermediate",
+                "category": "Design",
+                "is_featured": True
+            },
+            {
+                "title": "Python Backend Developer",
+                "description": "Build REST APIs with FastAPI and PostgreSQL. Experience with AWS services (Lambda, S3, RDS) is a plus. Knowledge of Docker and CI/CD pipelines required.",
+                "budget_type": "hourly",
+                "budget_min": 50,
+                "budget_max": 75,
+                "skills_required": "Python,FastAPI,PostgreSQL,AWS,Docker",
+                "location": "San Francisco, CA",
+                "duration": "6 months",
+                "experience_level": "expert",
+                "category": "Web Development",
+                "is_featured": False
+            },
+            {
+                "title": "Content Writer for Tech Blog",
+                "description": "Write technical articles about web development, programming, and software engineering. Must have strong technical background and excellent writing skills. SEO knowledge is a plus.",
+                "budget_type": "fixed",
+                "budget_min": 800,
+                "budget_max": 1500,
+                "skills_required": "Content Writing,Technical Writing,SEO,Blogging,Research",
+                "location": "Remote",
+                "duration": "Ongoing",
+                "experience_level": "entry",
+                "category": "Writing",
+                "is_featured": False
+            }
+        ]
+        
+        created_jobs = []
+        for job_data in sample_jobs:
+            job = Job(
+                title=job_data["title"],
+                description=job_data["description"],
+                budget_type=job_data["budget_type"],
+                budget_min=job_data["budget_min"],
+                budget_max=job_data["budget_max"],
+                skills_required=job_data["skills_required"],
+                location=job_data["location"],
+                duration=job_data["duration"],
+                experience_level=job_data["experience_level"],
+                category=job_data["category"],
+                is_featured=job_data["is_featured"],
+                client_id=current_user.id,
+                status='open',
+                created_at=datetime.utcnow()
+            )
+            db.add(job)
+            created_jobs.append(job)
+        
+        db.commit()
+        
+        return {
+            "message": f"Created {len(created_jobs)} sample jobs",
+            "jobs": [{
+                "id": job.id,
+                "title": job.title,
+                "category": job.category
+            } for job in created_jobs]
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        print(f"Error creating sample jobs: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error creating sample jobs: {str(e)}")
+
+# Health check endpoint
+@app.get("/api/health")
+def health_check():
+    """Health check endpoint for frontend"""
+    return {
+        "status": "healthy",
+        "message": "Backend is running",
+        "timestamp": datetime.utcnow().isoformat()
+    }
+
+# ================ END JOB ENDPOINTS ================
 
 if __name__ == "__main__":
     import uvicorn
