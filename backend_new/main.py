@@ -1167,6 +1167,433 @@ def health_check():
     }
 
 # ================ END JOB ENDPOINTS ================
+# ================ JOB DETAILS & APPLICATION ENDPOINTS ================
+
+# Check if job is saved by user
+@app.get("/api/jobs/{job_id}/check-saved")
+def check_saved_job(
+    job_id: int,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Check if user has saved this job"""
+    # For now, return False since we don't have saved jobs table
+    # You'll implement this later
+    return {
+        "saved": False,
+        "job_id": job_id
+    }
+
+# Get similar jobs
+@app.get("/api/jobs/{job_id}/similar")
+def get_similar_jobs(
+    job_id: int,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+    limit: int = 3
+):
+    """Get similar jobs based on skills and category"""
+    try:
+        # Get the current job
+        current_job = db.query(Job).filter(Job.id == job_id).first()
+        if not current_job:
+            return {"jobs": []}
+        
+        # Get similar jobs based on skills and category
+        similar_query = db.query(Job).filter(
+            Job.id != job_id,
+            Job.status == 'open',
+            Job.client_id != current_user.id  # Don't show own jobs
+        )
+        
+        # Try to match by category first
+        if current_job.category:
+            similar_query = similar_query.filter(Job.category == current_job.category)
+        
+        similar_jobs = similar_query.order_by(Job.created_at.desc()).limit(limit).all()
+        
+        jobs_list = []
+        for job in similar_jobs:
+            # Get proposals count
+            proposals_count = db.query(Proposal).filter(Proposal.job_id == job.id).count()
+            
+            # Format budget display
+            if job.budget_type == 'fixed':
+                budget_display = f"${job.budget_min:,.0f} - ${job.budget_max:,.0f}"
+            else:
+                budget_display = f"${job.budget_min}/hr - ${job.budget_max}/hr"
+            
+            # Get client info
+            client_name = job.client.full_name if job.client and job.client.full_name else "Anonymous Client"
+            
+            jobs_list.append({
+                "id": job.id,
+                "title": job.title,
+                "description": job.description[:100] + "..." if len(job.description) > 100 else job.description,
+                "budget_display": budget_display,
+                "budget_type": job.budget_type,
+                "location": job.location or "Remote",
+                "required_skills": job.skills_required.split(",") if job.skills_required else [],
+                "proposals_count": proposals_count,
+                "client": {
+                    "company_name": client_name
+                }
+            })
+        
+        return {"jobs": jobs_list}
+        
+    except Exception as e:
+        print(f"Error getting similar jobs: {str(e)}")
+        return {"jobs": []}
+
+# Job application endpoint
+class JobApplication(BaseModel):
+    cover_letter: str
+    bid_amount: float
+    estimated_days: int
+    links: List[str] = []
+
+@app.post("/api/jobs/{job_id}/apply")
+def apply_to_job_endpoint(
+    job_id: int,
+    application: JobApplication,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Submit an application for a job"""
+    try:
+        # Check if user is a freelancer
+        if current_user.user_type != 'freelancer':
+            raise HTTPException(
+                status_code=403, 
+                detail="Only freelancers can apply to jobs"
+            )
+        
+        # Check if job exists and is open
+        job = db.query(Job).filter(Job.id == job_id).first()
+        if not job:
+            raise HTTPException(status_code=404, detail="Job not found")
+        
+        if job.status != 'open':
+            raise HTTPException(status_code=400, detail="Job is not accepting applications")
+        
+        # Check if user is the client who posted the job
+        if job.client_id == current_user.id:
+            raise HTTPException(status_code=400, detail="You cannot apply to your own job")
+        
+        # Check if user has already applied
+        existing_proposal = db.query(Proposal).filter(
+            Proposal.job_id == job_id,
+            Proposal.freelancer_id == current_user.id
+        ).first()
+        
+        if existing_proposal:
+            raise HTTPException(status_code=400, detail="You have already applied to this job")
+        
+        # Validate bid amount
+        if job.budget_type == 'fixed':
+            if application.bid_amount < job.budget_min or application.bid_amount > job.budget_max:
+                raise HTTPException(
+                    status_code=400, 
+                    detail=f"Bid amount must be between ${job.budget_min} and ${job.budget_max}"
+                )
+        else:  # hourly
+            if application.bid_amount < job.budget_min or application.budget_amount > job.budget_max:
+                raise HTTPException(
+                    status_code=400, 
+                    detail=f"Hourly rate must be between ${job.budget_min}/hr and ${job.budget_max}/hr"
+                )
+        
+        # Create proposal
+        proposal = Proposal(
+            freelancer_id=current_user.id,
+            job_id=job_id,
+            cover_letter=application.cover_letter,
+            bid_amount=application.bid_amount,
+            estimated_days=application.estimated_days,
+            status="pending",
+            submitted_at=datetime.utcnow()
+        )
+        
+        db.add(proposal)
+        db.commit()
+        db.refresh(proposal)
+        
+        # Update user profile completion if this is first proposal
+        user_proposals = db.query(Proposal).filter(
+            Proposal.freelancer_id == current_user.id
+        ).count()
+        
+        if user_proposals == 1:  # First proposal
+            if current_user.profile_completion < 100:
+                current_user.profile_completion = min(100, current_user.profile_completion + 10)
+                db.commit()
+        
+        return {
+            "success": True,
+            "message": "Application submitted successfully!",
+            "proposal_id": proposal.id,
+            "status": proposal.status
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        print(f"Error submitting application: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error submitting application: {str(e)}")
+
+# Get detailed job info for application page
+@app.get("/api/jobs/{job_id}/application-info")
+def get_job_application_info(
+    job_id: int,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Get job information for application page"""
+    try:
+        job = db.query(Job).filter(Job.id == job_id).first()
+        if not job:
+            raise HTTPException(status_code=404, detail="Job not found")
+        
+        # Check if user has already applied
+        has_applied = db.query(Proposal).filter(
+            Proposal.job_id == job_id,
+            Proposal.freelancer_id == current_user.id
+        ).first() is not None
+        
+        if has_applied:
+            raise HTTPException(status_code=400, detail="You have already applied to this job")
+        
+        # Format budget info
+        if job.budget_type == 'fixed':
+            budget_display = f"${job.budget_min:,.0f} - ${job.budget_max:,.0f}"
+            budget_suggestion = job.budget_min
+        else:
+            budget_display = f"${job.budget_min}/hr - ${job.budget_max}/hr"
+            budget_suggestion = job.budget_min
+        
+        # Get client info
+        client_info = None
+        if job.client:
+            # Calculate client stats
+            completed_contracts = db.query(Contract).filter(
+                Contract.client_id == job.client_id,
+                Contract.status == 'completed'
+            ).count()
+            
+            total_spent_result = db.query(func.sum(Contract.total_amount)).filter(
+                Contract.client_id == job.client_id,
+                Contract.status == 'completed'
+            ).first()
+            total_spent = total_spent_result[0] or 0
+            
+            client_info = {
+                "id": job.client.id,
+                "full_name": job.client.full_name,
+                "company_name": job.client.company_name if job.client.company_name else None,
+                "description": job.client.description,
+                "verified": job.client.verified,
+                "member_since": job.client.created_at.year if job.client.created_at else None,
+                "completed_contracts": completed_contracts,
+                "total_spent": total_spent,
+                "rating": 4.5
+            }
+        
+        return {
+            "job": {
+                "id": job.id,
+                "title": job.title,
+                "description": job.description,
+                "budget_type": job.budget_type,
+                "budget_min": job.budget_min,
+                "budget_max": job.budget_max,
+                "budget_display": budget_display,
+                "budget_suggestion": budget_suggestion,
+                "skills_required": job.skills_required.split(",") if job.skills_required else [],
+                "location": job.location or "Remote",
+                "duration": job.duration,
+                "experience_level": job.experience_level or "Any",
+                "category": job.category,
+                "is_featured": job.is_featured,
+                "proposals_count": db.query(Proposal).filter(Proposal.job_id == job.id).count(),
+                "created_at": job.created_at.isoformat() if job.created_at else None
+            },
+            "client": client_info,
+            "application_requirements": {
+                "min_cover_letter_length": 100,
+                "max_cover_letter_length": 1000,
+                "allowed_file_types": [".pdf", ".jpg", ".jpeg", ".png", ".doc", ".docx"],
+                "max_file_size_mb": 5,
+                "max_files": 5,
+                "max_links": 5
+            }
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error getting job application info: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error getting job information: {str(e)}")
+
+# Get user's applications
+@app.get("/api/applications")
+def get_user_applications(
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+    status: Optional[str] = None,
+    page: int = 1,
+    limit: int = 10
+):
+    """Get all applications for current user"""
+    try:
+        if current_user.user_type != 'freelancer':
+            return {
+                "applications": [],
+                "total": 0,
+                "page": page,
+                "limit": limit,
+                "total_pages": 0
+            }
+        
+        # Build query
+        query = db.query(Proposal).filter(Proposal.freelancer_id == current_user.id)
+        
+        if status:
+            query = query.filter(Proposal.status == status)
+        
+        # Get total count
+        total = query.count()
+        
+        # Apply pagination
+        offset = (page - 1) * limit
+        proposals = query.order_by(Proposal.submitted_at.desc()).offset(offset).limit(limit).all()
+        
+        applications = []
+        for proposal in proposals:
+            job = proposal.job
+            applications.append({
+                "id": proposal.id,
+                "job_id": proposal.job_id,
+                "job_title": job.title if job else "Job not found",
+                "cover_letter": proposal.cover_letter[:200] + "..." if proposal.cover_letter and len(proposal.cover_letter) > 200 else proposal.cover_letter,
+                "bid_amount": proposal.bid_amount,
+                "estimated_days": proposal.estimated_days,
+                "status": proposal.status,
+                "submitted_at": proposal.submitted_at.isoformat() if proposal.submitted_at else None,
+                "client_name": job.client.full_name if job and job.client else "Unknown Client"
+            })
+        
+        return {
+            "applications": applications,
+            "total": total,
+            "page": page,
+            "limit": limit,
+            "total_pages": (total + limit - 1) // limit if limit > 0 else 1
+        }
+        
+    except Exception as e:
+        print(f"Error getting applications: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error getting applications: {str(e)}")
+
+# Get single application details
+@app.get("/api/applications/{application_id}")
+def get_application_details(
+    application_id: int,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Get detailed information about a specific application"""
+    try:
+        proposal = db.query(Proposal).filter(Proposal.id == application_id).first()
+        
+        if not proposal:
+            raise HTTPException(status_code=404, detail="Application not found")
+        
+        # Check if user owns this application
+        if proposal.freelancer_id != current_user.id:
+            raise HTTPException(status_code=403, detail="You don't have permission to view this application")
+        
+        job = proposal.job
+        client = job.client if job else None
+        
+        return {
+            "id": proposal.id,
+            "job": {
+                "id": job.id if job else None,
+                "title": job.title if job else "Job not found",
+                "description": job.description if job else None,
+                "budget_type": job.budget_type if job else None,
+                "budget_min": job.budget_min if job else None,
+                "budget_max": job.budget_max if job else None,
+                "duration": job.duration if job else None,
+                "experience_level": job.experience_level if job else None
+            },
+            "client": {
+                "id": client.id if client else None,
+                "full_name": client.full_name if client else "Unknown Client",
+                "company_name": client.company_name if client else None
+            } if client else None,
+            "proposal": {
+                "cover_letter": proposal.cover_letter,
+                "bid_amount": proposal.bid_amount,
+                "estimated_days": proposal.estimated_days,
+                "status": proposal.status,
+                "submitted_at": proposal.submitted_at.isoformat() if proposal.submitted_at else None
+            },
+            "messages": []  # You can add message system later
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error getting application details: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error getting application details: {str(e)}")
+
+# Update application status (for clients)
+@app.patch("/api/applications/{application_id}/status")
+def update_application_status(
+    application_id: int,
+    status_update: dict,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Update application status (for clients only)"""
+    try:
+        if current_user.user_type != 'client':
+            raise HTTPException(status_code=403, detail="Only clients can update application status")
+        
+        proposal = db.query(Proposal).filter(Proposal.id == application_id).first()
+        if not proposal:
+            raise HTTPException(status_code=404, detail="Application not found")
+        
+        # Check if current user is the client who posted the job
+        job = proposal.job
+        if not job or job.client_id != current_user.id:
+            raise HTTPException(status_code=403, detail="You don't have permission to update this application")
+        
+        new_status = status_update.get("status")
+        if not new_status or new_status not in ["pending", "accepted", "rejected", "interviewing", "hired"]:
+            raise HTTPException(status_code=400, detail="Invalid status")
+        
+        proposal.status = new_status
+        db.commit()
+        
+        return {
+            "success": True,
+            "message": f"Application status updated to {new_status}",
+            "application_id": proposal.id,
+            "status": proposal.status
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        print(f"Error updating application status: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error updating application status: {str(e)}")
+
+# ================ END JOB DETAILS & APPLICATION ENDPOINTS ================
 
 if __name__ == "__main__":
     import uvicorn

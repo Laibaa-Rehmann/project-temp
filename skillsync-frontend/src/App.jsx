@@ -15,7 +15,6 @@ import DashboardPage from './pages/DashboardPage';
 import FindWorkPage from './pages/FindWorkPage';
 import PostJobPage from './pages/PostJobPage';
 import FreelancersPage from './pages/FreelancersPage';
-import JobDetailsPage from './pages/JobDetailsPage';
 import MyJobsPage from './pages/MyJobsPage';
 import ProposalsPage from './pages/ProposalsPage';
 import ContractsPage from './pages/ContractsPage';
@@ -23,6 +22,8 @@ import MessagesPage from './pages/MessagesPage';
 import ProfilePage from './pages/ProfilePage';
 import SettingsPage from './pages/SettingsPage';
 import NotFoundPage from './pages/NotFoundPage';
+import JobDetailsPage from './pages/JobDetailsPage';
+import JobApplicationPage from './pages/JobApplicationPage';
 
 // Protected Route Component
 const ProtectedRoute = ({ children, requiredUserType }) => {
@@ -110,34 +111,45 @@ function App() {
               <MainLayout />
             </ProtectedRoute>
           }>
+            {/* Dashboard & Core Pages */}
             <Route path="dashboard" element={<DashboardPage />} />
+            
+            {/* Freelancer Pages */}
             <Route path="find-work" element={
               <ProtectedRoute requiredUserType="freelancer">
                 <FindWorkPage />
               </ProtectedRoute>
             } />
+            
+            {/* Job Pages - Accessible to all authenticated users */}
+            <Route path="jobs/:id" element={<JobDetailsPage />} />
+            <Route path="jobs/:id/apply" element={
+              <ProtectedRoute requiredUserType="freelancer">
+                <JobApplicationPage />
+              </ProtectedRoute>
+            } />
+            
+            {/* Client Pages */}
             <Route path="post-job" element={
               <ProtectedRoute requiredUserType="client">
                 <PostJobPage />
               </ProtectedRoute>
             } />
-            <Route path="freelancers" element={<FreelancersPage />} />
-            <Route path="jobs/:id" element={<JobDetailsPage />} />
             <Route path="my-jobs" element={
               <ProtectedRoute requiredUserType="client">
                 <MyJobsPage />
               </ProtectedRoute>
             } />
-            {/* <Route path="proposals" element={
-              <ProtectedRoute requiredUserType="freelancer">
-                <ProposalsPage />
-              </ProtectedRoute>
-            } /> */}
+            
+            {/* Shared Pages */}
+            <Route path="freelancers" element={<FreelancersPage />} />
             <Route path="contracts" element={<ContractsPage />} />
             <Route path="messages" element={<MessagesPage />} />
             <Route path="messages/:userId" element={<MessagesPage />} />
             <Route path="profile" element={<ProfilePage />} />
             <Route path="settings" element={<SettingsPage />} />
+            
+            {/* Proposals Page - Different views based on user type */}
             <Route path="proposals" element={<ProposalsPage />} />
           </Route>
 
