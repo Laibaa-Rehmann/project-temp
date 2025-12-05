@@ -432,13 +432,17 @@ const ContractsPage = () => {
                   
                   {/* Actions */}
                   <div className="lg:w-48 flex flex-col space-y-3">
-                    <button className="w-full py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 text-sm flex items-center justify-center">
+                    {/* View Details Button - UPDATED */}
+                    <Link 
+                      to={`/contracts/${contract.id || contract.contract_id}`}
+                      className="w-full py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 text-sm flex items-center justify-center transition-colors duration-200"
+                    >
                       <FileText className="w-4 h-4 mr-2" />
-                      View Contract
-                    </button>
+                      View Details
+                    </Link>
                     
                     <Link to={`/messages/${getClientName(contract).replace(/\s+/g, '-').toLowerCase()}`}>
-                      <button className="w-full py-2 border border-primary-600 text-primary-600 rounded-lg hover:bg-primary-50 text-sm flex items-center justify-center">
+                      <button className="w-full py-2 border border-primary-600 text-primary-600 rounded-lg hover:bg-primary-50 text-sm flex items-center justify-center transition-colors duration-200">
                         <MessageSquare className="w-4 h-4 mr-2" />
                         Message Client
                       </button>
@@ -450,7 +454,7 @@ const ContractsPage = () => {
                       </button>
                     )}
                     
-                    <button className="w-full py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 text-sm flex items-center justify-center">
+                    <button className="w-full py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 text-sm flex items-center justify-center transition-colors duration-200">
                       <Download className="w-4 h-4 mr-2" />
                       Download Invoice
                     </button>

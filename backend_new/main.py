@@ -12,6 +12,7 @@ from passlib.context import CryptContext
 from jose import JWTError, jwt
 from datetime import datetime, timedelta
 
+
 # Database
 DATABASE_URL = "postgresql://skilllink_user:kali@localhost:5432/skilllink_db"
 
@@ -158,7 +159,7 @@ class UserResponse(BaseModel):
     country: Optional[str]
     profile_completion: int
     verified: bool
-    created_at: Optional[datetime]  # Add this line
+    created_at: Optional[datetime] = None   # Add this line
     profile_picture: Optional[str] = None  # Add this line
 
     class Config:
@@ -2634,6 +2635,63 @@ def update_user_profile(
         raise HTTPException(status_code=500, detail=f"Error updating profile: {str(e)}")
 
 # ================ END PROFILE UPDATE ENDPOINT ================
+# ================ PAYMENT REQUEST ENDPOINT ================
+class PaymentRequest(BaseModel):
+    amount: float
+    description: str = "Payment request"
+
+@app.post("/api/contracts/{contract_id}/request-payment")
+async def request_payment(
+    contract_id: int,
+    payment_request: PaymentRequest,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Request payment for a contract"""
+    try:
+        # Get contract
+        contract = db.query(Contract).filter(Contract.id == contract_id).first()
+        if not contract:
+            raise HTTPException(status_code=404, detail="Contract not found")
+        
+        # Check if user is the freelancer
+        if contract.freelancer_id != current_user.id:
+            raise HTTPException(status_code=403, detail="Only the freelancer can request payment")
+        
+        # Check if contract is active
+        if contract.status != 'active':
+            raise HTTPException(status_code=400, detail="Contract is not active")
+        
+        # Check if requested amount is valid
+        remaining_amount = contract.total_amount - contract.paid_amount
+        if payment_request.amount > remaining_amount:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Requested amount (${payment_request.amount}) exceeds remaining balance (${remaining_amount})"
+            )
+        
+        # In a real application, you would:
+        # 1. Create a payment request record
+        # 2. Send notification to client
+        # 3. Possibly integrate with payment gateway
+        
+        # For now, just return success
+        return {
+            "success": True,
+            "message": "Payment request sent to client",
+            "requested_amount": payment_request.amount,
+            "remaining_balance": remaining_amount,
+            "contract_id": contract.id,
+            "client_id": contract.client_id
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error requesting payment: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ================ END PAYMENT REQUEST ENDPOINT ================
 
 # ================ END PROPOSAL ENDPOINTS ================
 if __name__ == "__main__":

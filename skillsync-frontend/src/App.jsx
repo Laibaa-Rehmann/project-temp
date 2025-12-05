@@ -6,6 +6,7 @@ import { AuthProvider } from './contexts/AuthContext';
 // Layout Components
 import MainLayout from './components/layout/MainLayout';
 import AuthLayout from './components/layout/AuthLayout';
+import ContractDetailsPage from './pages/ContractDetailsPage';
 
 // Pages
 import HomePage from './pages/HomePage';
@@ -148,6 +149,7 @@ function App() {
             <Route path="messages/:userId" element={<MessagesPage />} />
             <Route path="profile" element={<ProfilePage />} />
             <Route path="settings" element={<SettingsPage />} />
+            <Route path="/contracts/:contractId" element={<ContractDetailsPage />} />
             
             {/* Proposals Page - Different views based on user type */}
             <Route path="proposals" element={<ProposalsPage />} />
