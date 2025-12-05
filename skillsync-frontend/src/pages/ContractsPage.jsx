@@ -51,30 +51,46 @@ const ContractsPage = () => {
       const data = await response.json();
       setContracts(data);
       
-      // Calculate stats
-      const totalEarnings = data.reduce((sum, contract) => sum + contract.paid_amount, 0);
-      const pendingEarnings = data.reduce((sum, contract) => sum + contract.pending_amount, 0);
+      // Calculate stats from real data
+      const activeContracts = data.filter(c => c.status === 'active' || c.status === 'ongoing');
+      const completedContracts = data.filter(c => c.status === 'completed' || c.status === 'finished');
+      
+      const totalEarnings = data.reduce((sum, contract) => {
+        // Ensure we have valid numbers
+        const paid = contract.paid_amount || contract.paid || contract.amount_paid || 0;
+        return sum + parseFloat(paid);
+      }, 0);
+      
+      const pendingEarnings = data.reduce((sum, contract) => {
+        // Calculate pending if contract is still active
+        if (contract.status === 'active' || contract.status === 'ongoing') {
+          const total = contract.total_amount || contract.amount || contract.value || 0;
+          const paid = contract.paid_amount || contract.paid || contract.amount_paid || 0;
+          return sum + (parseFloat(total) - parseFloat(paid));
+        }
+        return sum;
+      }, 0);
       
       setStats({
         total: data.length,
-        active: data.filter(c => c.status === 'active').length,
-        completed: data.filter(c => c.status === 'completed').length,
-        totalEarnings,
-        pendingEarnings
+        active: activeContracts.length,
+        completed: completedContracts.length,
+        totalEarnings: totalEarnings,
+        pendingEarnings: pendingEarnings
       });
       
     } catch (error) {
       console.error('Error fetching contracts:', error);
       toast.error('Failed to load contracts');
       
-      // Fallback mock data
-      setContracts(mockContracts);
+      // Set empty state instead of mock data
+      setContracts([]);
       setStats({
-        total: 5,
-        active: 2,
-        completed: 3,
-        totalEarnings: 24500,
-        pendingEarnings: 8500
+        total: 0,
+        active: 0,
+        completed: 0,
+        totalEarnings: 0,
+        pendingEarnings: 0
       });
     } finally {
       setLoading(false);
@@ -86,85 +102,119 @@ const ContractsPage = () => {
   }, [filter]);
 
   const getStatusColor = (status) => {
-    switch(status) {
-      case 'active': return 'bg-green-100 text-green-800';
-      case 'completed': return 'bg-blue-100 text-blue-800';
-      case 'cancelled': return 'bg-red-100 text-red-800';
-      case 'disputed': return 'bg-orange-100 text-orange-800';
-      default: return 'bg-gray-100 text-gray-800';
+    const statusLower = status?.toLowerCase();
+    switch(statusLower) {
+      case 'active':
+      case 'ongoing': 
+        return 'bg-green-100 text-green-800';
+      case 'completed':
+      case 'finished':
+        return 'bg-blue-100 text-blue-800';
+      case 'cancelled':
+      case 'terminated':
+        return 'bg-red-100 text-red-800';
+      case 'disputed':
+      case 'under_review':
+        return 'bg-orange-100 text-orange-800';
+      case 'pending':
+      case 'draft':
+        return 'bg-yellow-100 text-yellow-800';
+      default: 
+        return 'bg-gray-100 text-gray-800';
     }
   };
 
   const getStatusIcon = (status) => {
-    switch(status) {
-      case 'active': return <TrendingUp className="w-4 h-4" />;
-      case 'completed': return <CheckCircle className="w-4 h-4" />;
-      case 'cancelled': return <AlertCircle className="w-4 h-4" />;
-      case 'disputed': return <AlertCircle className="w-4 h-4" />;
-      default: return <Briefcase className="w-4 h-4" />;
+    const statusLower = status?.toLowerCase();
+    switch(statusLower) {
+      case 'active':
+      case 'ongoing': 
+        return <TrendingUp className="w-4 h-4" />;
+      case 'completed':
+      case 'finished':
+        return <CheckCircle className="w-4 h-4" />;
+      case 'cancelled':
+      case 'terminated':
+        return <AlertCircle className="w-4 h-4" />;
+      case 'disputed':
+      case 'under_review':
+        return <AlertCircle className="w-4 h-4" />;
+      default: 
+        return <Briefcase className="w-4 h-4" />;
     }
   };
 
   const formatCurrency = (amount) => {
+    const numAmount = parseFloat(amount) || 0;
     return new Intl.NumberFormat('en-US', {
       style: 'currency',
       currency: 'USD',
       minimumFractionDigits: 0,
       maximumFractionDigits: 0
-    }).format(amount);
+    }).format(numAmount);
   };
 
   const formatDate = (dateString) => {
-    if (!dateString) return 'Ongoing';
-    const date = new Date(dateString);
-    return date.toLocaleDateString('en-US', { 
-      month: 'short', 
-      day: 'numeric', 
-      year: 'numeric' 
-    });
+    if (!dateString || dateString === 'null' || dateString === 'undefined') return 'Ongoing';
+    try {
+      const date = new Date(dateString);
+      if (isNaN(date.getTime())) return 'Ongoing';
+      return date.toLocaleDateString('en-US', { 
+        month: 'short', 
+        day: 'numeric', 
+        year: 'numeric' 
+      });
+    } catch (error) {
+      return 'Ongoing';
+    }
+  };
+
+  const calculateProgress = (contract) => {
+    const total = parseFloat(contract.total_amount || contract.amount || contract.value || 1);
+    const paid = parseFloat(contract.paid_amount || contract.paid || contract.amount_paid || 0);
+    if (total <= 0) return 0;
+    return Math.min(100, Math.round((paid / total) * 100));
+  };
+
+  const getContractTitle = (contract) => {
+    return contract.title || 
+           contract.project_name || 
+           contract.name || 
+           `Contract #${contract.id || contract.contract_id || 'N/A'}`;
+  };
+
+  const getClientName = (contract) => {
+    return contract.client_name || 
+           contract.client || 
+           contract.company_name || 
+           'Unknown Client';
+  };
+
+  const getJobTitle = (contract) => {
+    return contract.job_title || 
+           contract.role || 
+           contract.position || 
+           'Contractor';
+  };
+
+  const getTotalAmount = (contract) => {
+    return contract.total_amount || contract.amount || contract.value || 0;
+  };
+
+  const getPaidAmount = (contract) => {
+    return contract.paid_amount || contract.paid || contract.amount_paid || 0;
+  };
+
+  const getPendingAmount = (contract) => {
+    const total = parseFloat(getTotalAmount(contract));
+    const paid = parseFloat(getPaidAmount(contract));
+    return Math.max(0, total - paid);
   };
 
   const tabs = [
     { id: 'all', name: 'All Contracts', count: stats.total },
     { id: 'active', name: 'Active', count: stats.active },
     { id: 'completed', name: 'Completed', count: stats.completed }
-  ];
-
-  const mockContracts = [
-    {
-      id: 1,
-      title: 'E-commerce Platform Development',
-      client_name: 'TechCorp Inc.',
-      status: 'active',
-      total_amount: 8000,
-      paid_amount: 4000,
-      pending_amount: 4000,
-      hourly_rate: null,
-      hours_per_week: null,
-      start_date: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString(),
-      end_date: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
-      job_title: 'Full Stack Developer',
-      progress: 50,
-      last_payment_date: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString(),
-      next_payment_date: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString()
-    },
-    {
-      id: 2,
-      title: 'Mobile App UI/UX Design',
-      client_name: 'DesignStudio',
-      status: 'active',
-      total_amount: 4500,
-      paid_amount: 1500,
-      pending_amount: 3000,
-      hourly_rate: 55,
-      hours_per_week: 20,
-      start_date: new Date(Date.now() - 15 * 24 * 60 * 60 * 1000).toISOString(),
-      end_date: new Date(Date.now() + 45 * 24 * 60 * 60 * 1000).toISOString(),
-      job_title: 'UI/UX Designer',
-      progress: 33,
-      last_payment_date: new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString(),
-      next_payment_date: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString()
-    }
   ];
 
   return (
@@ -283,130 +333,142 @@ const ContractsPage = () => {
         </div>
       ) : contracts.length > 0 ? (
         <div className="space-y-6">
-          {contracts.map(contract => (
-            <div key={contract.id} className="bg-white rounded-xl p-6 shadow-sm border border-gray-100 hover:shadow-md transition-all duration-200">
-              <div className="flex flex-col lg:flex-row lg:items-start gap-6">
-                {/* Contract Details */}
-                <div className="flex-1">
-                  <div className="flex items-start justify-between mb-4">
-                    <div className="flex-1">
-                      <h3 className="text-lg font-semibold text-gray-900 mb-1">
-                        {contract.title}
-                      </h3>
-                      <div className="flex items-center text-gray-600 text-sm mb-2">
-                        <Users className="w-4 h-4 mr-1" />
-                        <span className="mr-4">{contract.client_name}</span>
-                        <Target className="w-4 h-4 mr-1" />
-                        <span>{contract.job_title}</span>
+          {contracts.map(contract => {
+            const progress = calculateProgress(contract);
+            const isActive = contract.status === 'active' || contract.status === 'ongoing';
+            const totalAmount = getTotalAmount(contract);
+            const paidAmount = getPaidAmount(contract);
+            const pendingAmount = getPendingAmount(contract);
+            
+            return (
+              <div key={contract.id || contract.contract_id} className="bg-white rounded-xl p-6 shadow-sm border border-gray-100 hover:shadow-md transition-all duration-200">
+                <div className="flex flex-col lg:flex-row lg:items-start gap-6">
+                  {/* Contract Details */}
+                  <div className="flex-1">
+                    <div className="flex items-start justify-between mb-4">
+                      <div className="flex-1">
+                        <h3 className="text-lg font-semibold text-gray-900 mb-1">
+                          {getContractTitle(contract)}
+                        </h3>
+                        <div className="flex items-center text-gray-600 text-sm mb-2">
+                          <Users className="w-4 h-4 mr-1" />
+                          <span className="mr-4">{getClientName(contract)}</span>
+                          <Target className="w-4 h-4 mr-1" />
+                          <span>{getJobTitle(contract)}</span>
+                        </div>
+                      </div>
+                      <div className="flex items-center space-x-2">
+                        <span className={`px-3 py-1 rounded-full text-xs font-medium ${getStatusColor(contract.status)} flex items-center`}>
+                          {getStatusIcon(contract.status)}
+                          <span className="ml-1 capitalize">{contract.status || 'unknown'}</span>
+                        </span>
                       </div>
                     </div>
-                    <div className="flex items-center space-x-2">
-                      <span className={`px-3 py-1 rounded-full text-xs font-medium ${getStatusColor(contract.status)} flex items-center`}>
-                        {getStatusIcon(contract.status)}
-                        <span className="ml-1 capitalize">{contract.status}</span>
-                      </span>
+                    
+                    {/* Progress Bar */}
+                    {isActive && (
+                      <div className="mb-6">
+                        <div className="flex items-center justify-between text-sm mb-2">
+                          <span className="text-gray-700">Payment Progress</span>
+                          <span className="font-medium">{progress}%</span>
+                        </div>
+                        <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
+                          <div 
+                            className="h-full bg-primary-600 rounded-full transition-all duration-500"
+                            style={{ width: `${progress}%` }}
+                          ></div>
+                        </div>
+                        <div className="flex justify-between text-xs text-gray-500 mt-1">
+                          <span>Paid: {formatCurrency(paidAmount)}</span>
+                          <span>Pending: {formatCurrency(pendingAmount)}</span>
+                        </div>
+                      </div>
+                    )}
+                    
+                    {/* Contract Info Grid */}
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+                      <div>
+                        <p className="text-gray-500">Total Value</p>
+                        <p className="font-semibold text-gray-900">{formatCurrency(totalAmount)}</p>
+                      </div>
+                      <div>
+                        <p className="text-gray-500">Paid</p>
+                        <p className="font-semibold text-green-600">{formatCurrency(paidAmount)}</p>
+                      </div>
+                      <div>
+                        <p className="text-gray-500">Started</p>
+                        <p className="font-semibold text-gray-900">{formatDate(contract.start_date || contract.created_at || contract.start_date)}</p>
+                      </div>
+                      <div>
+                        <p className="text-gray-500">{isActive ? 'End Date' : 'Completed'}</p>
+                        <p className="font-semibold text-gray-900">{formatDate(contract.end_date || contract.completed_at || contract.due_date)}</p>
+                      </div>
                     </div>
+                    
+                    {/* Hourly Rate Info */}
+                    {contract.hourly_rate && (
+                      <div className="mt-4 p-3 bg-blue-50 rounded-lg">
+                        <p className="text-sm text-blue-700">
+                          <span className="font-medium">Hourly Rate:</span> ${contract.hourly_rate}/hr
+                          {contract.hours_per_week && (
+                            <span className="ml-4">
+                              <span className="font-medium">Weekly Hours:</span> {contract.hours_per_week} hrs/week
+                            </span>
+                          )}
+                        </p>
+                      </div>
+                    )}
+                    
+                    {/* Payment Schedule */}
+                    {isActive && contract.next_payment_date && (
+                      <div className="mt-4 flex items-center text-sm text-gray-600">
+                        <Calendar className="w-4 h-4 mr-2" />
+                        <span>
+                          Next payment: {formatDate(contract.next_payment_date)}
+                        </span>
+                      </div>
+                    )}
                   </div>
                   
-                  {/* Progress Bar */}
-                  {contract.status === 'active' && (
-                    <div className="mb-6">
-                      <div className="flex items-center justify-between text-sm mb-2">
-                        <span className="text-gray-700">Payment Progress</span>
-                        <span className="font-medium">{contract.progress}%</span>
-                      </div>
-                      <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
-                        <div 
-                          className="h-full bg-primary-600 rounded-full transition-all duration-500"
-                          style={{ width: `${contract.progress}%` }}
-                        ></div>
-                      </div>
-                      <div className="flex justify-between text-xs text-gray-500 mt-1">
-                        <span>Paid: {formatCurrency(contract.paid_amount)}</span>
-                        <span>Pending: {formatCurrency(contract.pending_amount)}</span>
-                      </div>
-                    </div>
-                  )}
-                  
-                  {/* Contract Info Grid */}
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
-                    <div>
-                      <p className="text-gray-500">Total Value</p>
-                      <p className="font-semibold text-gray-900">{formatCurrency(contract.total_amount)}</p>
-                    </div>
-                    <div>
-                      <p className="text-gray-500">Paid</p>
-                      <p className="font-semibold text-green-600">{formatCurrency(contract.paid_amount)}</p>
-                    </div>
-                    <div>
-                      <p className="text-gray-500">Started</p>
-                      <p className="font-semibold text-gray-900">{formatDate(contract.start_date)}</p>
-                    </div>
-                    <div>
-                      <p className="text-gray-500">{contract.status === 'active' ? 'End Date' : 'Completed'}</p>
-                      <p className="font-semibold text-gray-900">{formatDate(contract.end_date)}</p>
-                    </div>
+                  {/* Actions */}
+                  <div className="lg:w-48 flex flex-col space-y-3">
+                    <button className="w-full py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 text-sm flex items-center justify-center">
+                      <FileText className="w-4 h-4 mr-2" />
+                      View Contract
+                    </button>
+                    
+                    <Link to={`/messages/${getClientName(contract).replace(/\s+/g, '-').toLowerCase()}`}>
+                      <button className="w-full py-2 border border-primary-600 text-primary-600 rounded-lg hover:bg-primary-50 text-sm flex items-center justify-center">
+                        <MessageSquare className="w-4 h-4 mr-2" />
+                        Message Client
+                      </button>
+                    </Link>
+                    
+                    {isActive && pendingAmount > 0 && (
+                      <button className="w-full btn-primary py-2 text-sm">
+                        Request Payment
+                      </button>
+                    )}
+                    
+                    <button className="w-full py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 text-sm flex items-center justify-center">
+                      <Download className="w-4 h-4 mr-2" />
+                      Download Invoice
+                    </button>
                   </div>
-                  
-                  {/* Hourly Rate Info */}
-                  {contract.hourly_rate && (
-                    <div className="mt-4 p-3 bg-blue-50 rounded-lg">
-                      <p className="text-sm text-blue-700">
-                        <span className="font-medium">Hourly Rate:</span> ${contract.hourly_rate}/hr
-                        {contract.hours_per_week && (
-                          <span className="ml-4">
-                            <span className="font-medium">Weekly Hours:</span> {contract.hours_per_week} hrs/week
-                          </span>
-                        )}
-                      </p>
-                    </div>
-                  )}
-                  
-                  {/* Payment Schedule */}
-                  {contract.status === 'active' && contract.next_payment_date && (
-                    <div className="mt-4 flex items-center text-sm text-gray-600">
-                      <Calendar className="w-4 h-4 mr-2" />
-                      <span>
-                        Next payment: {formatDate(contract.next_payment_date)}
-                      </span>
-                    </div>
-                  )}
-                </div>
-                
-                {/* Actions */}
-                <div className="lg:w-48 flex flex-col space-y-3">
-                  <button className="w-full py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 text-sm flex items-center justify-center">
-                    <FileText className="w-4 h-4 mr-2" />
-                    View Contract
-                  </button>
-                  
-                  <Link to={`/messages/${contract.client_name}`}>
-                    <button className="w-full py-2 border border-primary-600 text-primary-600 rounded-lg hover:bg-primary-50 text-sm flex items-center justify-center">
-                      <MessageSquare className="w-4 h-4 mr-2" />
-                      Message Client
-                    </button>
-                  </Link>
-                  
-                  {contract.status === 'active' && contract.pending_amount > 0 && (
-                    <button className="w-full btn-primary py-2 text-sm">
-                      Request Payment
-                    </button>
-                  )}
-                  
-                  <button className="w-full py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 text-sm flex items-center justify-center">
-                    <Download className="w-4 h-4 mr-2" />
-                    Download Invoice
-                  </button>
                 </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       ) : (
         <div className="text-center py-12 bg-white rounded-xl shadow-sm border border-gray-100">
           <Briefcase className="w-16 h-16 text-gray-300 mx-auto mb-4" />
-          <h3 className="text-xl font-semibold text-gray-900 mb-2">No contracts yet</h3>
-          <p className="text-gray-600 mb-6">When you get hired for a job, your contracts will appear here</p>
+          <h3 className="text-xl font-semibold text-gray-900 mb-2">No contracts found</h3>
+          <p className="text-gray-600 mb-6">
+            {filter === 'all' 
+              ? "You don't have any contracts yet. Start by applying to jobs!" 
+              : `No ${filter} contracts found.`}
+          </p>
           <Link to="/find-work">
             <button className="btn-primary">
               Browse Jobs

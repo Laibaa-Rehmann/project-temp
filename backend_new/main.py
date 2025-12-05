@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session, sessionmaker, relationship
 from pydantic import BaseModel, EmailStr
 from datetime import datetime
 from typing import Optional, List
+from pydantic import BaseModel
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from passlib.context import CryptContext
 from jose import JWTError, jwt
@@ -202,6 +203,35 @@ class JobRecommendation(BaseModel):
     is_featured: bool
     experience_level: str
 
+    class Config:
+        from_attributes = True
+
+# Add these Pydantic models for contracts
+class ContractBase(BaseModel):
+    title: str
+    client_id: int
+    job_id: int
+    status: str = "pending"
+    total_amount: float
+    paid_amount: float = 0
+    hourly_rate: Optional[float] = None
+    hours_per_week: Optional[int] = None
+    start_date: Optional[datetime] = None
+    end_date: Optional[datetime] = None
+
+class ContractCreate(ContractBase):
+    pass
+
+class ContractUpdate(BaseModel):
+    status: Optional[str] = None
+    paid_amount: Optional[float] = None
+    end_date: Optional[datetime] = None
+
+class ContractResponse(ContractBase):
+    id: int
+    freelancer_id: int
+    created_at: datetime
+    
     class Config:
         from_attributes = True
 
@@ -418,25 +448,28 @@ def get_dashboard_stats(current_user: User = Depends(get_current_active_user), d
     ).count()
     
     # Calculate active contracts
+     # In your existing /api/dashboard/stats endpoint, update the contracts calculation:
+
+        # Calculate active contracts
     active_contracts = db.query(Contract).filter(
-        Contract.freelancer_id == current_user.id,
-        Contract.status == "active"
-    ).count()
-    
-    # Calculate total earnings (sum of paid amount in completed contracts)
+            Contract.freelancer_id == current_user.id,
+            Contract.status == "active"
+        ).count()
+
+        # Calculate total earnings (sum of paid amount in all contracts)
     total_earnings_result = db.query(func.sum(Contract.paid_amount)).filter(
-        Contract.freelancer_id == current_user.id,
-        Contract.status == "completed"
-    ).first()
+            Contract.freelancer_id == current_user.id,
+            Contract.status.in_(["active", "completed"])  # Include both active and completed
+        ).first()
     total_earnings = total_earnings_result[0] or 0
-    
-    # Calculate pending earnings (total - paid in active contracts)
+
+        # Calculate pending earnings (total - paid in active contracts)
     pending_result = db.query(func.sum(Contract.total_amount - Contract.paid_amount)).filter(
-        Contract.freelancer_id == current_user.id,
-        Contract.status == "active"
-    ).first()
+            Contract.freelancer_id == current_user.id,
+            Contract.status == "active"
+        ).first()
     pending_earnings = pending_result[0] or 0
-    
+            
     # Calculate profile completion
     profile_completion = calculate_profile_completion(current_user)
     db.commit()
@@ -1594,6 +1627,375 @@ def update_application_status(
         raise HTTPException(status_code=500, detail=f"Error updating application status: {str(e)}")
 
 # ================ END JOB DETAILS & APPLICATION ENDPOINTS ================
+
+# ================ CONTRACTS ENDPOINTS ================
+
+@app.get("/api/contracts", response_model=List[ContractResponse])
+async def get_contracts(
+    status: Optional[str] = None,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Get all contracts for the current freelancer
+    """
+    try:
+        print(f"🔍 Fetching contracts for user: {current_user.username} (ID: {current_user.id}, Type: {current_user.user_type})")
+        
+        # For freelancers, get contracts where they are the freelancer
+        if current_user.user_type == 'freelancer':
+            query = db.query(Contract).filter(Contract.freelancer_id == current_user.id)
+        # For clients, get contracts where they are the client
+        elif current_user.user_type == 'client':
+            query = db.query(Contract).filter(Contract.client_id == current_user.id)
+        # For others, return empty
+        else:
+            return []
+        
+        # Apply status filter if provided
+        if status and status != "all":
+            query = query.filter(Contract.status == status)
+        
+        # Order by newest first
+        contracts = query.order_by(Contract.created_at.desc()).all()
+        
+        print(f"✅ Found {len(contracts)} contracts for user {current_user.username}")
+        return contracts
+        
+    except Exception as e:
+        print(f"❌ Error fetching contracts: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/contracts/stats")
+async def get_contract_stats(
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Get contract statistics for dashboard
+    """
+    try:
+        print(f"📊 Getting contract stats for user: {current_user.username}")
+        
+        # For freelancers, get contracts where they are the freelancer
+        if current_user.user_type == 'freelancer':
+            contracts = db.query(Contract).filter(Contract.freelancer_id == current_user.id).all()
+        # For clients, get contracts where they are the client
+        elif current_user.user_type == 'client':
+            contracts = db.query(Contract).filter(Contract.client_id == current_user.id).all()
+        # For others, return empty stats
+        else:
+            return {
+                "total": 0,
+                "active": 0,
+                "completed": 0,
+                "totalEarnings": 0,
+                "pendingEarnings": 0
+            }
+        
+        total = len(contracts)
+        active = len([c for c in contracts if c.status == "active"])
+        completed = len([c for c in contracts if c.status == "completed"])
+        
+        total_earnings = sum(c.paid_amount for c in contracts)
+        
+        # Calculate pending earnings from active contracts
+        pending_earnings = sum(
+            (c.total_amount - c.paid_amount) 
+            for c in contracts 
+            if c.status == "active" and c.total_amount > c.paid_amount
+        )
+        
+        stats = {
+            "total": total,
+            "active": active,
+            "completed": completed,
+            "totalEarnings": total_earnings,
+            "pendingEarnings": pending_earnings
+        }
+        
+        print(f"✅ Contract stats: {stats}")
+        return stats
+        
+    except Exception as e:
+        print(f"❌ Error fetching contract stats: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/contracts/{contract_id}", response_model=ContractResponse)
+async def get_contract(
+    contract_id: int,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Get a specific contract by ID
+    """
+    try:
+        contract = db.query(Contract).filter(Contract.id == contract_id).first()
+        
+        if not contract:
+            raise HTTPException(status_code=404, detail="Contract not found")
+        
+        # Check permissions
+        if (current_user.user_type == 'freelancer' and contract.freelancer_id != current_user.id) or \
+           (current_user.user_type == 'client' and contract.client_id != current_user.id):
+            raise HTTPException(status_code=403, detail="You don't have permission to view this contract")
+        
+        return contract
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error getting contract: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/contracts", response_model=ContractResponse)
+async def create_contract(
+    contract: ContractCreate,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Create a new contract (for clients)
+    """
+    try:
+        if current_user.user_type != 'client':
+            raise HTTPException(status_code=403, detail="Only clients can create contracts")
+        
+        # Check if job exists
+        job = db.query(Job).filter(Job.id == contract.job_id).first()
+        if not job:
+            raise HTTPException(status_code=404, detail="Job not found")
+        
+        # Check if client owns the job
+        if job.client_id != current_user.id:
+            raise HTTPException(status_code=403, detail="You don't own this job")
+        
+        # Get freelancer from proposal
+        proposal = db.query(Proposal).filter(
+            Proposal.job_id == contract.job_id,
+            Proposal.status == "accepted"
+        ).first()
+        
+        if not proposal:
+            raise HTTPException(status_code=400, detail="No accepted proposal found for this job")
+        
+        # Create contract
+        db_contract = Contract(
+            **contract.dict(),
+            freelancer_id=proposal.freelancer_id,
+            created_at=datetime.utcnow()
+        )
+        
+        db.add(db_contract)
+        db.commit()
+        db.refresh(db_contract)
+        
+        # Update proposal status to hired
+        proposal.status = "hired"
+        db.commit()
+        
+        return db_contract
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        print(f"Error creating contract: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.put("/api/contracts/{contract_id}", response_model=ContractResponse)
+async def update_contract(
+    contract_id: int,
+    contract_update: ContractUpdate,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Update a contract (status, payment, etc.)
+    """
+    try:
+        contract = db.query(Contract).filter(Contract.id == contract_id).first()
+        
+        if not contract:
+            raise HTTPException(status_code=404, detail="Contract not found")
+        
+        # Check permissions
+        if (current_user.user_type == 'freelancer' and contract.freelancer_id != current_user.id) and \
+           (current_user.user_type == 'client' and contract.client_id != current_user.id):
+            raise HTTPException(status_code=403, detail="You don't have permission to update this contract")
+        
+        update_data = contract_update.dict(exclude_unset=True)
+        
+        for field, value in update_data.items():
+            setattr(contract, field, value)
+        
+        db.commit()
+        db.refresh(contract)
+        
+        return contract
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        print(f"Error updating contract: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/api/contracts/{contract_id}")
+async def delete_contract(
+    contract_id: int,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Delete a contract (clients only)
+    """
+    try:
+        if current_user.user_type != 'client':
+            raise HTTPException(status_code=403, detail="Only clients can delete contracts")
+        
+        contract = db.query(Contract).filter(Contract.id == contract_id).first()
+        
+        if not contract:
+            raise HTTPException(status_code=404, detail="Contract not found")
+        
+        # Check if client owns the contract
+        if contract.client_id != current_user.id:
+            raise HTTPException(status_code=403, detail="You don't own this contract")
+        
+        db.delete(contract)
+        db.commit()
+        
+        return {"message": "Contract deleted successfully"}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        print(f"Error deleting contract: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/contracts/debug/all")
+async def get_all_contracts_debug(db: Session = Depends(get_db)):
+    """Debug endpoint to see all contracts (temporary)"""
+    contracts = db.query(Contract).all()
+    
+    result = []
+    for contract in contracts:
+        result.append({
+            "id": contract.id,
+            "title": contract.title,
+            "freelancer_id": contract.freelancer_id,
+            "client_id": contract.client_id,
+            "job_id": contract.job_id,
+            "status": contract.status,
+            "total_amount": contract.total_amount,
+            "paid_amount": contract.paid_amount,
+            "hourly_rate": contract.hourly_rate,
+            "hours_per_week": contract.hours_per_week,
+            "start_date": contract.start_date,
+            "end_date": contract.end_date,
+            "created_at": contract.created_at,
+            # Get usernames
+            "freelancer_username": contract.freelancer.username if contract.freelancer else None,
+            "client_username": contract.client.username if contract.client else None
+        })
+    
+    return result
+
+# For development/testing only
+@app.post("/api/contracts/test")
+async def create_test_contract(
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Create a test contract for development
+    """
+    try:
+        if current_user.user_type != 'freelancer':
+            raise HTTPException(status_code=403, detail="Only freelancers can create test contracts")
+        
+        # Find a client to use for test
+        client = db.query(User).filter(
+            User.user_type == "client"
+        ).first()
+        
+        if not client:
+            # Create a test client if none exists
+            test_client = User(
+                username=f"test_client_{int(datetime.utcnow().timestamp())}",
+                email="test@client.com",
+                hashed_password="$2b$12$EixZaYVK1fsbw1ZfbX3OXePaWxn96p36WQoeG6Lruj3vjPGga31lW",  # "secret"
+                user_type="client",
+                full_name="Test Client",
+                created_at=datetime.utcnow()
+            )
+            db.add(test_client)
+            db.commit()
+            db.refresh(test_client)
+            client = test_client
+        
+        # Find a job to use for test
+        job = db.query(Job).first()
+        if not job:
+            # Create a test job if none exists
+            test_job = Job(
+                title="Test Job",
+                description="Test job description",
+                client_id=client.id,
+                budget_min=5000,
+                budget_max=8000,
+                budget_type="fixed",
+                skills_required="Test,Skills",
+                duration="1 month",
+                experience_level="intermediate",
+                status="open",
+                created_at=datetime.utcnow()
+            )
+            db.add(test_job)
+            db.commit()
+            db.refresh(test_job)
+            job = test_job
+        
+        # Create test contract
+        test_contract = Contract(
+            title="Website Development",
+            freelancer_id=current_user.id,
+            client_id=client.id,
+            job_id=job.id,
+            status="active",
+            total_amount=5000,
+            paid_amount=2500,
+            hourly_rate=50,
+            hours_per_week=20,
+            start_date=datetime.utcnow(),
+            end_date=datetime.utcnow() + timedelta(days=30),
+            created_at=datetime.utcnow()
+        )
+        
+        db.add(test_contract)
+        db.commit()
+        db.refresh(test_contract)
+        
+        return {
+            "message": "Test contract created successfully",
+            "contract": {
+                "id": test_contract.id,
+                "title": test_contract.title,
+                "status": test_contract.status,
+                "total_amount": test_contract.total_amount,
+                "paid_amount": test_contract.paid_amount
+            }
+        }
+        
+    except Exception as e:
+        db.rollback()
+        print(f"Error creating test contract: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ================ END CONTRACTS ENDPOINTS ================
 
 if __name__ == "__main__":
     import uvicorn
