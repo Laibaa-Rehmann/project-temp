@@ -158,6 +158,8 @@ class UserResponse(BaseModel):
     country: Optional[str]
     profile_completion: int
     verified: bool
+    created_at: Optional[datetime]  # Add this line
+    profile_picture: Optional[str] = None  # Add this line
 
     class Config:
         from_attributes = True
@@ -2593,6 +2595,45 @@ def create_test_proposal(
         db.rollback()
         print(f"❌ Error creating test proposals: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+# ================ PROFILE UPDATE ENDPOINT ================
+class UserUpdate(BaseModel):
+    full_name: Optional[str] = None
+    profile_title: Optional[str] = None
+    description: Optional[str] = None
+    skills: Optional[str] = None
+    hourly_rate: Optional[float] = None
+    country: Optional[str] = None
+    company_name: Optional[str] = None
+    profile_picture: Optional[str] = None
+
+@app.put("/users/me", response_model=UserResponse)
+def update_user_profile(
+    user_update: UserUpdate,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Update current user's profile"""
+    try:
+        # Update fields that are provided
+        update_data = user_update.dict(exclude_unset=True)
+        
+        for field, value in update_data.items():
+            setattr(current_user, field, value)
+        
+        # Recalculate profile completion
+        current_user.profile_completion = calculate_profile_completion(current_user)
+        
+        db.commit()
+        db.refresh(current_user)
+        
+        return current_user
+        
+    except Exception as e:
+        db.rollback()
+        print(f"Error updating user profile: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error updating profile: {str(e)}")
+
+# ================ END PROFILE UPDATE ENDPOINT ================
 
 # ================ END PROPOSAL ENDPOINTS ================
 if __name__ == "__main__":

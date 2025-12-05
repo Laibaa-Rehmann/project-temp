@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState,useEffect } from 'react';
 import { Outlet, Link, useLocation, useNavigate } from 'react-router-dom';
 import { 
   Search, 
@@ -21,9 +21,34 @@ import toast from 'react-hot-toast';
 
 const MainLayout = () => {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
   const location = useLocation();
   const navigate = useNavigate();
   const { user, logout } = useAuth();
+  const handleSearchSubmit = (e) => {
+    e.preventDefault();
+    if (searchQuery.trim()) {
+      navigate(`/find-work?search=${encodeURIComponent(searchQuery.trim())}`);
+      setSearchQuery('');
+      setMobileMenuOpen(false);
+    }
+  };
+
+  // Handle Enter key press
+  const handleKeyPress = (e) => {
+    if (e.key === 'Enter') {
+      handleSearchSubmit(e);
+    }
+  };
+  useEffect(() => {
+    if (location.pathname === '/find-work' && location.search) {
+      const params = new URLSearchParams(location.search);
+      const searchParam = params.get('search');
+      if (searchParam) {
+        setSearchQuery(searchParam);
+      }
+    }
+  }, [location]);
 
   const clientNavigation = [
     { name: 'Dashboard', href: '/dashboard', icon: Home },
@@ -95,16 +120,30 @@ const MainLayout = () => {
             {/* Right side */}
             <div className="flex items-center space-x-4">
               {/* Search Bar */}
-              {user?.user_type === 'freelancer' && (
-                <div className="hidden md:block relative">
-                  <input
-                    type="text"
-                    placeholder="Search jobs..."
-                    className="w-64 pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"
-                  />
-                  <Search className="absolute left-3 top-2.5 w-4 h-4 text-gray-400" />
-                </div>
+              {/* // Replace the search bar section with this: */}
+        {user?.user_type === 'freelancer' && (
+          <div className="hidden md:block relative">
+            <form onSubmit={handleSearchSubmit} className="relative">
+              <input
+                type="text"
+                placeholder="Search jobs..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="w-64 pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+              />
+              <Search className="absolute left-3 top-2.5 w-4 h-4 text-gray-400" />
+              {searchQuery && (
+                <button
+                  type="button"
+                  onClick={() => setSearchQuery('')}
+                  className="absolute right-3 top-2.5 text-gray-400 hover:text-gray-600"
+                >
+                  <X className="w-4 h-4" />
+                </button>
               )}
+            </form>
+          </div>
+        )}
 
               {/* Notifications */}
               <button className="p-2 rounded-lg hover:bg-gray-100 transition-colors relative">
@@ -121,13 +160,13 @@ const MainLayout = () => {
                 <span className="absolute top-1 right-1 w-2 h-2 bg-blue-500 rounded-full"></span>
               </Link>
 
-              {/* Balance for freelancers */}
+              {/* Balance for freelancers
               {user?.user_type === 'freelancer' && (
                 <div className="hidden md:flex items-center space-x-2 px-3 py-2 bg-green-50 text-green-700 rounded-lg">
                   <DollarSign className="w-4 h-4" />
                   <span className="font-medium">$0.00</span>
                 </div>
-              )}
+              )} */}
 
               {/* User Menu */}
               <div className="relative group">
