@@ -2694,6 +2694,363 @@ async def request_payment(
 # ================ END PAYMENT REQUEST ENDPOINT ================
 
 # ================ END PROPOSAL ENDPOINTS ================
+# ================ MESSAGES DATABASE MODEL ================
+class Message(Base):
+    __tablename__ = "messages"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    sender_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    receiver_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    job_id = Column(Integer, ForeignKey("jobs.id"), nullable=True)
+    content = Column(Text, nullable=False)
+    is_read = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    # Relationships
+    sender = relationship("User", foreign_keys=[sender_id])
+    receiver = relationship("User", foreign_keys=[receiver_id])
+    job = relationship("Job", foreign_keys=[job_id])
+# ================ MESSAGE SCHEMAS ================
+class MessageCreate(BaseModel):
+    receiver_id: int
+    content: str
+    job_id: Optional[int] = None
+
+class MessageResponse(BaseModel):
+    id: int
+    sender_id: int
+    receiver_id: int
+    job_id: Optional[int]
+    content: str
+    is_read: bool
+    created_at: datetime
+    sender_name: Optional[str] = None
+    receiver_name: Optional[str] = None
+    job_title: Optional[str] = None
+    
+    class Config:
+        from_attributes = True
+
+class ThreadResponse(BaseModel):
+    other_user_id: int
+    other_user_name: str
+    other_user_avatar: Optional[str] = None
+    last_message: str
+    last_message_time: str
+    unread_count: int
+    job_id: Optional[int] = None
+    job_title: Optional[str] = None
+    
+    class Config:
+        from_attributes = True
+# ================ END MESSAGE SCHEMAS ================
+# ================ MESSAGE ENDPOINTS ================
+from datetime import timedelta
+from fastapi import WebSocket, WebSocketDisconnect
+from typing import Dict, List
+
+# WebSocket connections manager
+class ConnectionManager:
+    def __init__(self):
+        self.active_connections: Dict[int, List[WebSocket]] = {}
+    
+    async def connect(self, websocket: WebSocket, user_id: int):
+        await websocket.accept()
+        if user_id not in self.active_connections:
+            self.active_connections[user_id] = []
+        self.active_connections[user_id].append(websocket)
+    
+    def disconnect(self, websocket: WebSocket, user_id: int):
+        if user_id in self.active_connections:
+            self.active_connections[user_id].remove(websocket)
+            if not self.active_connections[user_id]:
+                del self.active_connections[user_id]
+    
+    async def send_personal_message(self, message: dict, user_id: int):
+        if user_id in self.active_connections:
+            for connection in self.active_connections[user_id]:
+                await connection.send_json(message)
+    
+    async def broadcast(self, message: dict):
+        for user_connections in self.active_connections.values():
+            for connection in user_connections:
+                await connection.send_json(message)
+
+manager = ConnectionManager()
+
+# WebSocket endpoint for real-time messaging
+@app.websocket("/ws/{user_id}")
+async def websocket_endpoint(websocket: WebSocket, user_id: int):
+    await manager.connect(websocket, user_id)
+    try:
+        while True:
+            data = await websocket.receive_json()
+            # Handle incoming WebSocket messages if needed
+    except WebSocketDisconnect:
+        manager.disconnect(websocket, user_id)
+
+@app.get("/api/messages/threads", response_model=List[ThreadResponse])
+async def get_message_threads(
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Get all message threads for current user"""
+    try:
+        # Get unique users the current user has messaged with
+        sent_threads_query = db.query(
+            Message.receiver_id,
+            func.max(Message.created_at).label('last_message_time')
+        ).filter(Message.sender_id == current_user.id).group_by(Message.receiver_id)
+        
+        received_threads_query = db.query(
+            Message.sender_id,
+            func.max(Message.created_at).label('last_message_time')
+        ).filter(Message.receiver_id == current_user.id).group_by(Message.sender_id)
+        
+        # Combine both sent and received messages
+        user_threads = {}
+        
+        # Process sent messages
+        for receiver_id, last_time in sent_threads_query.all():
+            user_threads[receiver_id] = last_time
+        
+        # Process received messages
+        for sender_id, last_time in received_threads_query.all():
+            if sender_id in user_threads:
+                if last_time > user_threads[sender_id]:
+                    user_threads[sender_id] = last_time
+            else:
+                user_threads[sender_id] = last_time
+        
+        threads = []
+        
+        for other_user_id, last_time in user_threads.items():
+            # Get the other user details
+            other_user = db.query(User).filter(User.id == other_user_id).first()
+            if not other_user:
+                continue
+            
+            # Get the last message between these users
+            last_message = db.query(Message).filter(
+                ((Message.sender_id == current_user.id) & (Message.receiver_id == other_user_id)) |
+                ((Message.sender_id == other_user_id) & (Message.receiver_id == current_user.id))
+            ).order_by(Message.created_at.desc()).first()
+            
+            # Count unread messages
+            unread_count = db.query(Message).filter(
+                Message.sender_id == other_user_id,
+                Message.receiver_id == current_user.id,
+                Message.is_read == False
+            ).count()
+            
+            # Get job title if associated
+            job_title = None
+            if last_message and last_message.job_id:
+                job = db.query(Job).filter(Job.id == last_message.job_id).first()
+                job_title = job.title if job else None
+            
+            # Format time
+            now = datetime.utcnow()
+            time_diff = now - last_time
+            if time_diff.days > 365:
+                last_message_time = f"{time_diff.days // 365}y ago"
+            elif time_diff.days > 30:
+                last_message_time = f"{time_diff.days // 30}mo ago"
+            elif time_diff.days > 0:
+                last_message_time = f"{time_diff.days}d ago"
+            elif time_diff.seconds > 3600:
+                last_message_time = f"{time_diff.seconds // 3600}h ago"
+            elif time_diff.seconds > 60:
+                last_message_time = f"{time_diff.seconds // 60}m ago"
+            else:
+                last_message_time = "Just now"
+            
+            threads.append(ThreadResponse(
+                other_user_id=other_user_id,
+                other_user_name=other_user.full_name or other_user.username,
+                other_user_avatar=other_user.profile_picture,
+                last_message=last_message.content[:50] + "..." if last_message and len(last_message.content) > 50 else (last_message.content if last_message else "No messages yet"),
+                last_message_time=last_message_time,
+                unread_count=unread_count,
+                job_id=last_message.job_id if last_message else None,
+                job_title=job_title
+            ))
+        
+        # Sort by last message time (newest first)
+        threads.sort(key=lambda x: x.last_message_time, reverse=True)
+        
+        return threads
+        
+    except Exception as e:
+        print(f"Error getting threads: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/messages/conversation/{other_user_id}", response_model=List[MessageResponse])
+async def get_conversation(
+    other_user_id: int,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+    page: int = 1,
+    limit: int = 50
+):
+    """Get messages between current user and another user"""
+    try:
+        # Mark messages as read when fetching
+        db.query(Message).filter(
+            Message.sender_id == other_user_id,
+            Message.receiver_id == current_user.id,
+            Message.is_read == False
+        ).update({Message.is_read: True})
+        db.commit()
+        
+        # Get messages
+        messages = db.query(Message).filter(
+            ((Message.sender_id == current_user.id) & (Message.receiver_id == other_user_id)) |
+            ((Message.sender_id == other_user_id) & (Message.receiver_id == current_user.id))
+        ).order_by(Message.created_at.desc()).offset((page - 1) * limit).limit(limit).all()
+        
+        # Format response
+        formatted_messages = []
+        for msg in messages:
+            sender = db.query(User).filter(User.id == msg.sender_id).first()
+            receiver = db.query(User).filter(User.id == msg.receiver_id).first()
+            job_title = None
+            if msg.job_id:
+                job = db.query(Job).filter(Job.id == msg.job_id).first()
+                job_title = job.title if job else None
+            
+            formatted_messages.append(MessageResponse(
+                id=msg.id,
+                sender_id=msg.sender_id,
+                receiver_id=msg.receiver_id,
+                job_id=msg.job_id,
+                content=msg.content,
+                is_read=msg.is_read,
+                created_at=msg.created_at,
+                sender_name=sender.full_name or sender.username if sender else "Unknown",
+                receiver_name=receiver.full_name or receiver.username if receiver else "Unknown",
+                job_title=job_title
+            ))
+        
+        return list(reversed(formatted_messages))  # Return in chronological order
+        
+    except Exception as e:
+        print(f"Error getting conversation: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/messages/send", response_model=MessageResponse)
+async def send_message(
+    message_data: MessageCreate,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Send a new message"""
+    try:
+        # Check if receiver exists
+        receiver = db.query(User).filter(User.id == message_data.receiver_id).first()
+        if not receiver:
+            raise HTTPException(status_code=404, detail="Receiver not found")
+        
+        # Create message
+        message = Message(
+            sender_id=current_user.id,
+            receiver_id=message_data.receiver_id,
+            job_id=message_data.job_id,
+            content=message_data.content,
+            is_read=False,
+            created_at=datetime.utcnow()
+        )
+        
+        db.add(message)
+        db.commit()
+        db.refresh(message)
+        
+        # Get sender and receiver info for response
+        sender = db.query(User).filter(User.id == current_user.id).first()
+        job_title = None
+        if message.job_id:
+            job = db.query(Job).filter(Job.id == message.job_id).first()
+            job_title = job.title if job else None
+        
+        # Send real-time update via WebSocket
+        message_response = MessageResponse(
+            id=message.id,
+            sender_id=message.sender_id,
+            receiver_id=message.receiver_id,
+            job_id=message.job_id,
+            content=message.content,
+            is_read=message.is_read,
+            created_at=message.created_at,
+            sender_name=sender.full_name or sender.username,
+            receiver_name=receiver.full_name or receiver.username,
+            job_title=job_title
+        )
+        
+        # Send to receiver via WebSocket
+        await manager.send_personal_message({
+            "type": "new_message",
+            "message": message_response.dict()
+        }, message_data.receiver_id)
+        
+        return message_response
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        print(f"Error sending message: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.patch("/api/messages/{message_id}/read")
+async def mark_message_read(
+    message_id: int,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Mark a message as read"""
+    try:
+        message = db.query(Message).filter(Message.id == message_id).first()
+        if not message:
+            raise HTTPException(status_code=404, detail="Message not found")
+        
+        # Check if user is the receiver
+        if message.receiver_id != current_user.id:
+            raise HTTPException(status_code=403, detail="Not authorized to mark this message as read")
+        
+        message.is_read = True
+        db.commit()
+        
+        return {"success": True, "message": "Message marked as read"}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        print(f"Error marking message read: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/messages/unread/count")
+async def get_unread_count(
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Get count of unread messages"""
+    try:
+        # Fixed count query
+        unread_count = db.query(func.count(Message.id)).filter(
+            Message.receiver_id == current_user.id,
+            Message.is_read == False
+        ).scalar() or 0
+        
+        return {"unread_count": unread_count}
+        
+    except Exception as e:
+        print(f"Error getting unread count: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+# ================ END MESSAGE ENDPOINTS ================
+
+# Add this after your other models and before Base.metadata.create_all()
+# ================ END MESSAGES DATABASE MODEL ================
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="127.0.0.1", port=8000)
