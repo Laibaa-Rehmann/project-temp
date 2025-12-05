@@ -96,6 +96,8 @@ class Job(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     client = relationship("User", foreign_keys=[client_id])
 
+
+
 class Proposal(Base):
     __tablename__ = "proposals"
     id = Column(Integer, primary_key=True, index=True)
@@ -106,6 +108,9 @@ class Proposal(Base):
     estimated_days = Column(Integer)
     status = Column(String, default='pending')  # 'pending', 'accepted', 'rejected', 'interviewing', 'hired'
     submitted_at = Column(DateTime, default=datetime.utcnow)
+    last_updated = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)  # ADD THIS LINE
+    budget_type = Column(String, default='fixed')  # ADD THIS LINE
+    budget_amount = Column(String) 
     freelancer = relationship("User", foreign_keys=[freelancer_id])
     job = relationship("Job", foreign_keys=[job_id])
 
@@ -1996,7 +2001,600 @@ async def create_test_contract(
         raise HTTPException(status_code=500, detail=str(e))
 
 # ================ END CONTRACTS ENDPOINTS ================
+# ================ PROPOSAL ENDPOINTS ================
 
+# Pydantic schemas for proposals
+class ProposalBase(BaseModel):
+    job_id: int
+    cover_letter: str
+    bid_amount: float
+    estimated_days: Optional[int] = None
+class ProposalCreate(ProposalBase):
+    pass
+
+class ProposalResponse(BaseModel):
+    id: int
+    job_id: int
+    freelancer_id: int
+    cover_letter: str
+    bid_amount: float
+    estimated_days: Optional[int]
+    status: str
+    submitted_at: datetime
+    last_updated: Optional[datetime]  # Make this optional
+    job_title: Optional[str] = None  # Add these fields
+    client_name: Optional[str] = None
+    client_rating: Optional[float] = None
+    budget_type: Optional[str] = None
+    budget_amount: Optional[str] = None
+    
+    class Config:
+        from_attributes = True
+
+class ProposalUpdate(BaseModel):
+    status: Optional[str] = None
+    cover_letter: Optional[str] = None
+    bid_amount: Optional[float] = None
+    estimated_days: Optional[int] = None
+
+# class ProposalResponse(BaseModel):
+    id: int
+    job_id: int
+    freelancer_id: int
+    cover_letter: str
+    bid_amount: float
+    estimated_days: Optional[int]
+    status: str
+    submitted_at: datetime
+    last_updated: Optional[datetime]  # Make this optional
+    job_title: Optional[str] = None 
+    job: Optional[dict] = None
+    client: Optional[dict] = None
+    
+    class Config:
+        from_attributes = True
+
+class ProposalListResponse(BaseModel):
+    proposals: List[ProposalResponse]
+    total: int
+    page: int
+    limit: int
+    total_pages: int
+
+class ProposalStats(BaseModel):
+    total: int
+    pending: int
+    interviewing: int
+    accepted: int
+    rejected: int
+    withdrawn: int
+    hired: int
+
+@app.get("/api/proposals", response_model=ProposalListResponse)
+def get_proposals(
+    status: Optional[str] = None,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+    page: int = 1,
+    limit: int = 10
+):
+    """
+    Get all proposals for the current freelancer with pagination and filtering
+    """
+    try:
+        print(f"🔍 Fetching proposals for user: {current_user.username} (Type: {current_user.user_type})")
+        
+        if current_user.user_type != 'freelancer':
+            return ProposalListResponse(
+                proposals=[],
+                total=0,
+                page=page,
+                limit=limit,
+                total_pages=0
+            )
+        
+        # Build query
+        query = db.query(Proposal).filter(Proposal.freelancer_id == current_user.id)
+        
+        # Apply status filter
+        if status and status != 'all':
+            query = query.filter(Proposal.status == status)
+        
+        # Get total count
+        total = query.count()
+        print(f"📊 Total proposals found: {total}")
+        
+        # Apply pagination
+        offset = (page - 1) * limit
+        proposals = query.order_by(Proposal.submitted_at.desc()).offset(offset).limit(limit).all()
+        
+        print(f"📄 Fetched {len(proposals)} proposals")
+        
+        # Format proposals with job and client info
+        proposal_responses = []
+        for proposal in proposals:
+            job = proposal.job
+            client = job.client if job else None
+            # Get client rating from user or default
+            client_rating = None
+            if client:
+                # You can add a rating system later
+                client_rating = 4.5
+            
+            proposal_data = {
+                "id": proposal.id,
+                "job_id": proposal.job_id,
+                "freelancer_id": proposal.freelancer_id,
+                "cover_letter": proposal.cover_letter,
+                "bid_amount": proposal.bid_amount,
+                "estimated_days": proposal.estimated_days,
+                "status": proposal.status,
+                "submitted_at": proposal.submitted_at,
+                "last_updated": proposal.last_updated,
+                "job": None,
+                "client": None
+            }
+            if job:
+                proposal_data["job"] = {
+                    "id": job.id,
+                    "title": job.title,
+                    "description": job.description,
+                    "budget_type": job.budget_type,
+                    "budget_min": job.budget_min,
+                    "budget_max": job.budget_max,
+                    "budget_display": f"${job.budget_min:,.0f} - ${job.budget_max:,.0f}" if job.budget_type == 'fixed' else f"${job.budget_min}/hr - ${job.budget_max}/hr",
+                    "duration": job.duration,
+                    "experience_level": job.experience_level,
+                    "category": job.category
+                }
+            
+            if client:
+                proposal_data["client"] = {
+                    "id": client.id,
+                    "name": client.full_name or client.username,
+                    "company_name": client.company_name,
+                    "rating": 4.5,  # You can calculate this from reviews
+                    "total_spent": 0  # You can calculate this from contracts
+                }
+            
+            proposal_responses.append(ProposalResponse(**proposal_data))
+        
+        return ProposalListResponse(
+            proposals=proposal_responses,
+            total=total,
+            page=page,
+            limit=limit,
+            total_pages=(total + limit - 1) // limit if limit > 0 else 1
+        )
+        
+    except Exception as e:
+        print(f"❌ Error fetching proposals: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/proposals/stats", response_model=ProposalStats)
+def get_proposal_stats(
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Get proposal statistics for the current freelancer
+    """
+    try:
+        if current_user.user_type != 'freelancer':
+            return ProposalStats(
+                total=0,
+                pending=0,
+                interviewing=0,
+                accepted=0,
+                rejected=0,
+                withdrawn=0,
+                hired=0
+            )
+        
+        # Get all proposals for the user
+        proposals = db.query(Proposal).filter(Proposal.freelancer_id == current_user.id).all()
+        
+        stats = {
+            "total": len(proposals),
+            "pending": len([p for p in proposals if p.status == 'pending']),
+            "interviewing": len([p for p in proposals if p.status == 'interviewing']),
+            "accepted": len([p for p in proposals if p.status == 'accepted']),
+            "rejected": len([p for p in proposals if p.status == 'rejected']),
+            "withdrawn": len([p for p in proposals if p.status == 'withdrawn']),
+            "hired": len([p for p in proposals if p.status == 'hired'])
+        }
+        
+        print(f"📊 Proposal stats for {current_user.username}: {stats}")
+        return ProposalStats(**stats)
+        
+    except Exception as e:
+        print(f"❌ Error fetching proposal stats: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/proposals/{proposal_id}", response_model=ProposalResponse)
+def get_proposal(
+    proposal_id: int,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Get a specific proposal by ID
+    """
+    try:
+        proposal = db.query(Proposal).filter(Proposal.id == proposal_id).first()
+        
+        if not proposal:
+            raise HTTPException(status_code=404, detail="Proposal not found")
+        
+        # Check if user owns this proposal
+        if proposal.freelancer_id != current_user.id:
+            raise HTTPException(status_code=403, detail="You don't have permission to view this proposal")
+        
+        # Get job and client info
+        job = proposal.job
+        client = job.client if job else None
+        
+        proposal_data = {
+            "id": proposal.id,
+            "job_id": proposal.job_id,
+            "freelancer_id": proposal.freelancer_id,
+            "cover_letter": proposal.cover_letter,
+            "bid_amount": proposal.bid_amount,
+            "estimated_days": proposal.estimated_days,
+            "status": proposal.status,
+            "submitted_at": proposal.submitted_at,
+            "last_updated": proposal.last_updated,
+            "job": None,
+            "client": None
+        }
+        
+        if job:
+            proposal_data["job"] = {
+                "id": job.id,
+                "title": job.title,
+                "description": job.description,
+                "budget_type": job.budget_type,
+                "budget_min": job.budget_min,
+                "budget_max": job.budget_max,
+                "budget_display": f"${job.budget_min:,.0f} - ${job.budget_max:,.0f}" if job.budget_type == 'fixed' else f"${job.budget_min}/hr - ${job.budget_max}/hr",
+                "duration": job.duration,
+                "experience_level": job.experience_level,
+                "category": job.category,
+                "skills_required": job.skills_required.split(",") if job.skills_required else [],
+                "location": job.location or "Remote",
+                "created_at": job.created_at
+            }
+        
+        if client:
+            proposal_data["client"] = {
+                "id": client.id,
+                "name": client.full_name or client.username,
+                "company_name": client.company_name,
+                "description": client.description,
+                "country": client.country,
+                "rating": 4.5,
+                "total_spent": 0,
+                "member_since": client.created_at.year if client.created_at else None
+            }
+        
+        return ProposalResponse(**proposal_data)
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"❌ Error fetching proposal: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/proposals", response_model=ProposalResponse)
+def create_proposal(
+    proposal: ProposalCreate,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Create a new proposal
+    """
+    try:
+        if current_user.user_type != 'freelancer':
+            raise HTTPException(status_code=403, detail="Only freelancers can create proposals")
+        
+        print(f"📝 Creating proposal for user: {current_user.username}")
+        
+        # Check if job exists
+        job = db.query(Job).filter(Job.id == proposal.job_id).first()
+        if not job:
+            raise HTTPException(status_code=404, detail="Job not found")
+        
+        # Check if job is open
+        if job.status != 'open':
+            raise HTTPException(status_code=400, detail="Job is not open for proposals")
+        
+        # Check if user already applied
+        existing_proposal = db.query(Proposal).filter(
+            Proposal.job_id == proposal.job_id,
+            Proposal.freelancer_id == current_user.id
+        ).first()
+        
+        if existing_proposal:
+            raise HTTPException(status_code=400, detail="You have already applied to this job")
+        
+        # Validate bid amount
+        if proposal.bid_amount <= 0:
+            raise HTTPException(status_code=400, detail="Bid amount must be greater than 0")
+        
+        if job.budget_type == 'fixed':
+            if proposal.bid_amount < job.budget_min or proposal.bid_amount > job.budget_max:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Bid amount must be between ${job.budget_min:,.0f} and ${job.budget_max:,.0f}"
+                )
+        else:  # hourly
+            if proposal.bid_amount < job.budget_min or proposal.bid_amount > job.budget_max:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Hourly rate must be between ${job.budget_min}/hr and ${job.budget_max}/hr"
+                )
+        
+        # Create proposal
+        db_proposal = Proposal(
+            **proposal.dict(),
+            freelancer_id=current_user.id,
+            status='pending',
+            submitted_at=datetime.utcnow()
+        )
+        
+        db.add(db_proposal)
+        db.commit()
+        db.refresh(db_proposal)
+        
+        # Get job and client info for response
+        client = job.client if job else None
+        
+        proposal_data = {
+            "id": db_proposal.id,
+            "job_id": db_proposal.job_id,
+            "freelancer_id": db_proposal.freelancer_id,
+            "cover_letter": db_proposal.cover_letter,
+            "bid_amount": db_proposal.bid_amount,
+            "estimated_days": db_proposal.estimated_days,
+            "status": db_proposal.status,
+            "submitted_at": db_proposal.submitted_at,
+            "last_updated": db_proposal.last_updated,
+            "job": None,
+            "client": None
+        }
+        
+        if job:
+            proposal_data["job"] = {
+                "id": job.id,
+                "title": job.title,
+                "description": job.description[:100] + "..." if len(job.description) > 100 else job.description
+            }
+        
+        if client:
+            proposal_data["client"] = {
+                "id": client.id,
+                "name": client.full_name or client.username
+            }
+        
+        print(f"✅ Proposal created successfully: {db_proposal.id}")
+        return ProposalResponse(**proposal_data)
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        print(f"❌ Error creating proposal: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.put("/api/proposals/{proposal_id}", response_model=ProposalResponse)
+def update_proposal(
+    proposal_id: int,
+    proposal_update: ProposalUpdate,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Update a proposal (e.g., withdraw, update details)
+    """
+    try:
+        proposal = db.query(Proposal).filter(Proposal.id == proposal_id).first()
+        
+        if not proposal:
+            raise HTTPException(status_code=404, detail="Proposal not found")
+        
+        # Check if user owns this proposal
+        if proposal.freelancer_id != current_user.id:
+            raise HTTPException(status_code=403, detail="You don't have permission to update this proposal")
+        
+        # Only allow updates to pending proposals
+        if proposal.status != 'pending':
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Cannot update proposal with status '{proposal.status}'"
+            )
+        
+        # Update proposal
+        update_data = proposal_update.dict(exclude_unset=True)
+        
+        # Validate bid amount if updating
+        if 'bid_amount' in update_data:
+            job = proposal.job
+            if job:
+                if job.budget_type == 'fixed':
+                    if update_data['bid_amount'] < job.budget_min or update_data['bid_amount'] > job.budget_max:
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"Bid amount must be between ${job.budget_min:,.0f} and ${job.budget_max:,.0f}"
+                        )
+                else:  # hourly
+                    if update_data['bid_amount'] < job.budget_min or update_data['bid_amount'] > job.budget_max:
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"Hourly rate must be between ${job.budget_min}/hr and ${job.budget_max}/hr"
+                        )
+        
+        # Update fields
+        for field, value in update_data.items():
+            setattr(proposal, field, value)
+        
+        proposal.last_updated = datetime.utcnow()
+        db.commit()
+        db.refresh(proposal)
+        
+        return ProposalResponse(
+            id=proposal.id,
+            job_id=proposal.job_id,
+            freelancer_id=proposal.freelancer_id,
+            cover_letter=proposal.cover_letter,
+            bid_amount=proposal.bid_amount,
+            estimated_days=proposal.estimated_days,
+            status=proposal.status,
+            submitted_at=proposal.submitted_at,
+            last_updated=proposal.last_updated,
+            job=None,
+            client=None
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        print(f"❌ Error updating proposal: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/api/proposals/{proposal_id}")
+def delete_proposal(
+    proposal_id: int,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Delete a proposal (only for pending proposals)
+    """
+    try:
+        proposal = db.query(Proposal).filter(Proposal.id == proposal_id).first()
+        
+        if not proposal:
+            raise HTTPException(status_code=404, detail="Proposal not found")
+        
+        # Check if user owns this proposal
+        if proposal.freelancer_id != current_user.id:
+            raise HTTPException(status_code=403, detail="You don't have permission to delete this proposal")
+        
+        # Only allow deletion of pending proposals
+        if proposal.status != 'pending':
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Cannot delete proposal with status '{proposal.status}'"
+            )
+        
+        db.delete(proposal)
+        db.commit()
+        
+        return {"message": "Proposal deleted successfully"}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        print(f"❌ Error deleting proposal: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/proposals/debug/all")
+def get_all_proposals_debug(
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Debug endpoint to see all proposals (for testing only)
+    """
+    proposals = db.query(Proposal).all()
+    
+    result = []
+    for proposal in proposals:
+        result.append({
+            "id": proposal.id,
+            "job_id": proposal.job_id,
+            "freelancer_id": proposal.freelancer_id,
+            "cover_letter": proposal.cover_letter[:50] + "..." if proposal.cover_letter and len(proposal.cover_letter) > 50 else proposal.cover_letter,
+            "bid_amount": proposal.bid_amount,
+            "estimated_days": proposal.estimated_days,
+            "status": proposal.status,
+            "submitted_at": proposal.submitted_at,
+            "last_updated": proposal.last_updated,
+            "freelancer_username": proposal.freelancer.username if proposal.freelancer else None,
+            "job_title": proposal.job.title if proposal.job else None
+        })
+    
+    return result
+
+@app.post("/api/proposals/test")
+def create_test_proposal(
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Create test proposals for development
+    """
+    try:
+        if current_user.user_type != 'freelancer':
+            raise HTTPException(status_code=403, detail="Only freelancers can create test proposals")
+        
+        print(f"🧪 Creating test proposals for: {current_user.username}")
+        
+        # Find some open jobs
+        jobs = db.query(Job).filter(Job.status == 'open').limit(3).all()
+        
+        if not jobs:
+            return {"message": "No open jobs found to create test proposals"}
+        
+        test_proposals = []
+        statuses = ['pending', 'interviewing', 'accepted', 'rejected', 'hired']
+        
+        for i, job in enumerate(jobs):
+            status = statuses[i % len(statuses)]
+            
+            # Check if proposal already exists
+            existing = db.query(Proposal).filter(
+                Proposal.job_id == job.id,
+                Proposal.freelancer_id == current_user.id
+            ).first()
+            
+            if existing:
+                print(f"⚠️  Proposal already exists for job {job.id}, skipping...")
+                continue
+            
+            proposal = Proposal(
+                freelancer_id=current_user.id,
+                job_id=job.id,
+                cover_letter=f"This is a test proposal for {job.title}. I have extensive experience in this field and believe I can deliver excellent results.",
+                bid_amount=job.budget_min + (job.budget_max - job.budget_min) * 0.5,  # Midpoint of budget range
+                estimated_days=30,
+                status=status,
+                submitted_at=datetime.utcnow()
+            )
+            
+            db.add(proposal)
+            test_proposals.append({
+                "job_title": job.title,
+                "bid_amount": proposal.bid_amount,
+                "status": proposal.status
+            })
+        
+        db.commit()
+        
+        return {
+            "message": f"Created {len(test_proposals)} test proposals",
+            "proposals": test_proposals
+        }
+        
+    except Exception as e:
+        db.rollback()
+        print(f"❌ Error creating test proposals: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ================ END PROPOSAL ENDPOINTS ================
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="127.0.0.1", port=8000)

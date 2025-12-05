@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { 
   FileText, 
+  Star,
   Clock, 
   CheckCircle, 
   XCircle, 
@@ -34,82 +35,96 @@ const ProposalsPage = () => {
   const [activeTab, setActiveTab] = useState('all');
   const [withdrawingId, setWithdrawingId] = useState(null);
 
-  const fetchProposals = async () => {
-    setLoading(true);
-    try {
-      const token = localStorage.getItem('token');
-      const response = await fetch(`http://localhost:8000/api/proposals?status=${filter}`, {
+  // Fetch proposals - FIXED
+const fetchProposals = async () => {
+  setLoading(true);
+  try {
+    const token = localStorage.getItem('token');
+    if (!token) {
+      throw new Error('No authentication token found');
+    }
+
+    // Fetch proposals with status filter
+    const statusParam = filter !== 'all' ? `&status=${filter}` : '';
+    const response = await fetch(
+      `http://localhost:8000/api/proposals?limit=100${statusParam}`,
+      {
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'
         }
-      });
-      
-      if (!response.ok) {
-        throw new Error('Failed to fetch proposals');
       }
-      
-      const data = await response.json();
-      setProposals(data);
-      
-      // Calculate stats
-      const statsData = {
-        total: data.length,
-        pending: data.filter(p => p.status === 'pending').length,
-        interviewing: data.filter(p => p.status === 'interviewing').length,
-        accepted: data.filter(p => p.status === 'accepted').length,
-        rejected: data.filter(p => p.status === 'rejected').length
-      };
-      setStats(statsData);
-      
-    } catch (error) {
-      console.error('Error fetching proposals:', error);
-      toast.error('Failed to load proposals');
-      
-      // Fallback mock data
-      setProposals(mockProposals);
-      setStats({
-        total: 8,
-        pending: 3,
-        interviewing: 2,
-        accepted: 2,
-        rejected: 1
-      });
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleWithdrawProposal = async (proposalId) => {
-    if (!window.confirm('Are you sure you want to withdraw this proposal?')) return;
+    );
     
-    setWithdrawingId(proposalId);
-    try {
-      const token = localStorage.getItem('token');
-      const response = await fetch(`http://localhost:8000/api/proposals/${proposalId}`, {
-        method: 'PUT',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ status: 'withdrawn' })
-      });
-      
-      if (!response.ok) {
-        throw new Error('Failed to withdraw proposal');
-      }
-      
-      toast.success('Proposal withdrawn successfully');
-      fetchProposals(); // Refresh list
-      
-    } catch (error) {
-      console.error('Error withdrawing proposal:', error);
-      toast.error('Failed to withdraw proposal');
-    } finally {
-      setWithdrawingId(null);
+    if (response.status === 401) {
+      localStorage.removeItem('token');
+      window.location.href = '/login';
+      return;
     }
-  };
+    
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.detail || `HTTP error! status: ${response.status}`);
+    }
+    
+    const data = await response.json();
+    setProposals(data.proposals);
+    
+    // Fetch stats separately
+    const statsResponse = await fetch('http://localhost:8000/api/proposals/stats', {
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      }
+    });
+    
+    if (statsResponse.ok) {
+      const statsData = await statsResponse.json();
+      setStats(statsData);
+    } else {
+      // Calculate stats from proposals
+      calculateStatsFromProposals(data.proposals);
+    }
+    
+  } catch (error) {
+    console.error('Error fetching proposals:', error);
+    toast.error(error.message || 'Failed to load proposals');
+  } finally {
+    setLoading(false);
+  }
+};
 
+// Withdraw proposal - FIXED
+const handleWithdrawProposal = async (proposalId) => {
+  if (!window.confirm('Are you sure you want to withdraw this proposal?')) return;
+  
+  setWithdrawingId(proposalId);
+  try {
+    const token = localStorage.getItem('token');
+    const response = await fetch(`http://localhost:8000/api/proposals/${proposalId}`, {
+      method: 'PUT',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ status: 'withdrawn' })
+    });
+    
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.detail || 'Failed to withdraw proposal');
+    }
+    
+    toast.success('Proposal withdrawn successfully');
+    fetchProposals(); // Refresh list
+    
+  } catch (error) {
+    console.error('Error withdrawing proposal:', error);
+    toast.error(error.message || 'Failed to withdraw proposal');
+  } finally {
+    setWithdrawingId(null);
+  }
+};
   useEffect(() => {
     fetchProposals();
   }, [filter]);
