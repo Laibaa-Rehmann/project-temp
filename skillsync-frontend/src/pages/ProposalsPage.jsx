@@ -36,98 +36,157 @@ const ProposalsPage = () => {
   const [withdrawingId, setWithdrawingId] = useState(null);
 
   // Fetch proposals - FIXED
-const fetchProposals = async () => {
-  setLoading(true);
-  try {
-    const token = localStorage.getItem('token');
-    if (!token) {
-      throw new Error('No authentication token found');
-    }
+  const fetchProposals = async () => {
+    setLoading(true);
+    try {
+      const token = localStorage.getItem('token');
+      if (!token) {
+        throw new Error('No authentication token found');
+      }
 
-    // Fetch proposals with status filter
-    const statusParam = filter !== 'all' ? `&status=${filter}` : '';
-    const response = await fetch(
-      `http://localhost:8000/api/proposals?limit=100${statusParam}`,
-      {
+      // Fetch proposals with status filter
+      const statusParam = filter !== 'all' ? `&status=${filter}` : '';
+      const response = await fetch(
+        `http://localhost:8000/api/proposals?limit=100${statusParam}`,
+        {
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          }
+        }
+      );
+      
+      if (response.status === 401) {
+        localStorage.removeItem('token');
+        window.location.href = '/login';
+        return;
+      }
+      
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.detail || `HTTP error! status: ${response.status}`);
+      }
+      
+      const data = await response.json();
+      setProposals(data.proposals);
+      
+      // Fetch stats separately
+      const statsResponse = await fetch('http://localhost:8000/api/proposals/stats', {
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'
         }
+      });
+      
+      if (statsResponse.ok) {
+        const statsData = await statsResponse.json();
+        setStats(statsData);
+      } else {
+        // Calculate stats from proposals
+        calculateStatsFromProposals(data.proposals);
       }
-    );
-    
-    if (response.status === 401) {
-      localStorage.removeItem('token');
-      window.location.href = '/login';
-      return;
+      
+    } catch (error) {
+      console.error('Error fetching proposals:', error);
+      toast.error(error.message || 'Failed to load proposals');
+    } finally {
+      setLoading(false);
     }
-    
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      throw new Error(errorData.detail || `HTTP error! status: ${response.status}`);
-    }
-    
-    const data = await response.json();
-    setProposals(data.proposals);
-    
-    // Fetch stats separately
-    const statsResponse = await fetch('http://localhost:8000/api/proposals/stats', {
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json'
-      }
-    });
-    
-    if (statsResponse.ok) {
-      const statsData = await statsResponse.json();
-      setStats(statsData);
-    } else {
-      // Calculate stats from proposals
-      calculateStatsFromProposals(data.proposals);
-    }
-    
-  } catch (error) {
-    console.error('Error fetching proposals:', error);
-    toast.error(error.message || 'Failed to load proposals');
-  } finally {
-    setLoading(false);
-  }
-};
+  };
 
-// Withdraw proposal - FIXED
-const handleWithdrawProposal = async (proposalId) => {
-  if (!window.confirm('Are you sure you want to withdraw this proposal?')) return;
-  
-  setWithdrawingId(proposalId);
-  try {
-    const token = localStorage.getItem('token');
-    const response = await fetch(`http://localhost:8000/api/proposals/${proposalId}`, {
-      method: 'PUT',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({ status: 'withdrawn' })
-    });
+  // Withdraw proposal - FIXED
+  const handleWithdrawProposal = async (proposalId) => {
+    if (!window.confirm('Are you sure you want to withdraw this proposal?')) return;
     
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      throw new Error(errorData.detail || 'Failed to withdraw proposal');
+    setWithdrawingId(proposalId);
+    try {
+      const token = localStorage.getItem('token');
+      
+      // Find the full proposal object from your proposals state
+      const proposalToUpdate = proposals.find(p => p.id === proposalId);
+      
+      if (!proposalToUpdate) {
+        throw new Error('Proposal not found');
+      }
+      
+      // Create the full update object with all required fields
+      const updateData = {
+        id: proposalToUpdate.id,
+        job_id: proposalToUpdate.job_id,
+        freelancer_id: proposalToUpdate.freelancer_id,
+        submitted_at: proposalToUpdate.submitted_at,
+        last_updated: new Date().toISOString(), // Update timestamp
+        status: 'withdrawn',
+        // Include any other fields that might be required
+        cover_letter: proposalToUpdate.cover_letter,
+        proposed_rate: proposalToUpdate.proposed_rate,
+        estimated_timeline: proposalToUpdate.estimated_timeline,
+        // Include original fields that might be in the object
+        ...proposalToUpdate
+      };
+      
+      console.log('Sending update data:', updateData);
+      
+      const response = await fetch(`http://localhost:8000/api/proposals/${proposalId}`, {
+        method: 'PUT',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(updateData)
+      });
+      
+      if (!response.ok) {
+        const errorData = await response.json();
+        console.error('Validation errors:', errorData);
+        throw new Error('Failed to update proposal');
+      }
+      
+      const result = await response.json();
+      console.log('Update successful:', result);
+      
+      // Update local state
+      setProposals(prevProposals => 
+        prevProposals.map(proposal => 
+          proposal.id === proposalId 
+            ? { ...proposal, status: 'withdrawn', last_updated: updateData.last_updated }
+            : proposal
+        )
+      );
+      
+      toast.success('Proposal withdrawn successfully');
+      
+    } catch (error) {
+      console.error('Error withdrawing proposal:', error);
+      toast.error(error.message || 'Failed to withdraw proposal');
+    } finally {
+      setWithdrawingId(null);
     }
-    
-    toast.success('Proposal withdrawn successfully');
-    fetchProposals(); // Refresh list
-    
-  } catch (error) {
-    console.error('Error withdrawing proposal:', error);
-    toast.error(error.message || 'Failed to withdraw proposal');
-  } finally {
-    setWithdrawingId(null);
-  }
-};
+  };
+
   useEffect(() => {
     fetchProposals();
   }, [filter]);
+
+  // Filter proposals based on active tab
+  const getFilteredProposals = () => {
+    switch (activeTab) {
+      case 'all':
+        return proposals.filter(p => p.status !== 'withdrawn'); // Don't show withdrawn in "All"
+      case 'withdrawn':
+        return proposals.filter(p => p.status === 'withdrawn');
+      case 'pending':
+        return proposals.filter(p => p.status === 'pending');
+      case 'interviewing':
+        return proposals.filter(p => p.status === 'interviewing');
+      case 'accepted':
+        return proposals.filter(p => p.status === 'accepted');
+      case 'rejected':
+        return proposals.filter(p => p.status === 'rejected');
+      default:
+        return proposals.filter(p => p.status !== 'withdrawn');
+    }
+  };
 
   const getStatusIcon = (status) => {
     switch(status) {
@@ -136,6 +195,7 @@ const handleWithdrawProposal = async (proposalId) => {
       case 'accepted': return <CheckCircle className="w-4 h-4 text-green-600" />;
       case 'rejected': return <XCircle className="w-4 h-4 text-red-600" />;
       case 'hired': return <TrendingUp className="w-4 h-4 text-purple-600" />;
+      case 'withdrawn': return <XCircle className="w-4 h-4 text-gray-600" />;
       default: return <Clock className="w-4 h-4 text-gray-600" />;
     }
   };
@@ -147,6 +207,7 @@ const handleWithdrawProposal = async (proposalId) => {
       case 'accepted': return 'bg-green-100 text-green-800';
       case 'rejected': return 'bg-red-100 text-red-800';
       case 'hired': return 'bg-purple-100 text-purple-800';
+      case 'withdrawn': return 'bg-gray-100 text-gray-800';
       default: return 'bg-gray-100 text-gray-800';
     }
   };
@@ -182,56 +243,12 @@ const handleWithdrawProposal = async (proposalId) => {
     { id: 'pending', name: 'Pending', count: stats.pending },
     { id: 'interviewing', name: 'Interviewing', count: stats.interviewing },
     { id: 'accepted', name: 'Accepted', count: stats.accepted },
-    { id: 'rejected', name: 'Rejected', count: stats.rejected }
+    { id: 'rejected', name: 'Rejected', count: stats.rejected },
+    { id: 'withdrawn', name: 'Withdrawn', count: proposals.filter(p => p.status === 'withdrawn').length }
   ];
 
-  const mockProposals = [
-    {
-      id: 1,
-      job_id: 101,
-      job_title: 'Full Stack Developer for E-commerce Platform',
-      client_name: 'TechCorp Inc.',
-      cover_letter: 'I have 5+ years of experience building e-commerce solutions with React and Node.js...',
-      bid_amount: 6000,
-      estimated_days: 21,
-      status: 'pending',
-      submitted_at: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString(),
-      last_updated: new Date(Date.now() - 1 * 24 * 60 * 60 * 1000).toISOString(),
-      client_rating: 4.8,
-      budget_type: 'fixed',
-      budget_amount: '$5,000'
-    },
-    {
-      id: 2,
-      job_id: 102,
-      job_title: 'UI/UX Designer for Mobile App',
-      client_name: 'DesignStudio',
-      cover_letter: 'As a senior designer with expertise in mobile app interfaces...',
-      bid_amount: 55,
-      estimated_days: null,
-      status: 'interviewing',
-      submitted_at: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString(),
-      last_updated: new Date(Date.now() - 1 * 24 * 60 * 60 * 1000).toISOString(),
-      client_rating: 4.9,
-      budget_type: 'hourly',
-      budget_amount: '$50/hr'
-    },
-    {
-      id: 3,
-      job_id: 103,
-      job_title: 'Python Data Analyst',
-      client_name: 'DataInsights Co.',
-      cover_letter: 'I have extensive experience with data analysis using Python and Pandas...',
-      bid_amount: 4000,
-      estimated_days: 14,
-      status: 'accepted',
-      submitted_at: new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString(),
-      last_updated: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString(),
-      client_rating: 4.7,
-      budget_type: 'fixed',
-      budget_amount: '$3,500'
-    }
-  ];
+  // Calculate filtered proposals
+  const filteredProposals = getFilteredProposals();
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
@@ -252,7 +269,7 @@ const handleWithdrawProposal = async (proposalId) => {
       </div>
 
       {/* Stats Overview */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-8">
+      <div className="grid grid-cols-2 md:grid-cols-6 gap-4 mb-8">
         <div className="bg-white rounded-xl p-4 shadow-sm border border-gray-100">
           <div className="flex items-center justify-between">
             <div>
@@ -298,6 +315,15 @@ const handleWithdrawProposal = async (proposalId) => {
             <XCircle className="w-8 h-8 text-red-600" />
           </div>
         </div>
+        <div className="bg-white rounded-xl p-4 shadow-sm border border-gray-100">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm text-gray-600">Withdrawn</p>
+              <p className="text-2xl font-bold text-gray-600">{proposals.filter(p => p.status === 'withdrawn').length}</p>
+            </div>
+            <XCircle className="w-8 h-8 text-gray-600" />
+          </div>
+        </div>
       </div>
 
       {/* Tabs */}
@@ -327,7 +353,7 @@ const handleWithdrawProposal = async (proposalId) => {
                     : 'bg-gray-100 text-gray-600'
                   }
                 `}>
-                  {tab.count}
+                  {tab.id === 'withdrawn' ? proposals.filter(p => p.status === 'withdrawn').length : tab.count}
                 </span>
               </button>
             ))}
@@ -351,10 +377,11 @@ const handleWithdrawProposal = async (proposalId) => {
               <option value="accepted">Accepted</option>
               <option value="rejected">Rejected</option>
               <option value="hired">Hired</option>
+              <option value="withdrawn">Withdrawn</option>
             </select>
           </div>
           <span className="text-sm text-gray-600">
-            Showing {proposals.length} proposal{proposals.length !== 1 ? 's' : ''}
+            Showing {filteredProposals.length} proposal{filteredProposals.length !== 1 ? 's' : ''}
           </span>
         </div>
         <button className="text-sm text-primary-600 hover:text-primary-700 font-medium">
@@ -368,10 +395,15 @@ const handleWithdrawProposal = async (proposalId) => {
           <Loader2 className="w-12 h-12 text-primary-600 animate-spin mx-auto mb-4" />
           <p className="text-gray-600">Loading your proposals...</p>
         </div>
-      ) : proposals.length > 0 ? (
+      ) : filteredProposals.length > 0 ? (
         <div className="space-y-4">
-          {proposals.map(proposal => (
-            <div key={proposal.id} className="bg-white rounded-xl p-6 shadow-sm border border-gray-100 hover:shadow-md transition-all duration-200">
+          {filteredProposals.map(proposal => (
+            <div 
+              key={proposal.id} 
+              className={`bg-white rounded-xl p-6 shadow-sm border border-gray-100 hover:shadow-md transition-all duration-200 ${
+                proposal.status === 'withdrawn' ? 'opacity-75' : ''
+              }`}
+            >
               <div className="flex flex-col lg:flex-row lg:items-start gap-6">
                 {/* Left Column - Job Info */}
                 <div className="flex-1">
@@ -456,6 +488,13 @@ const handleWithdrawProposal = async (proposalId) => {
                       Withdraw
                     </button>
                   )}
+                  
+                  {/* Only show for withdrawn proposals */}
+                  {proposal.status === 'withdrawn' && (
+                    <div className="text-center py-2 text-sm text-gray-500">
+                      Withdrawn on {proposal.last_updated ? formatDate(proposal.last_updated) : 'recently'}
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
@@ -464,37 +503,47 @@ const handleWithdrawProposal = async (proposalId) => {
       ) : (
         <div className="text-center py-12 bg-white rounded-xl shadow-sm border border-gray-100">
           <FileText className="w-16 h-16 text-gray-300 mx-auto mb-4" />
-          <h3 className="text-xl font-semibold text-gray-900 mb-2">No proposals yet</h3>
-          <p className="text-gray-600 mb-6">Start applying to jobs to see your proposals here</p>
-          <Link to="/find-work">
-            <button className="btn-primary">
-              Browse Jobs
-            </button>
-          </Link>
+          <h3 className="text-xl font-semibold text-gray-900 mb-2">
+            {activeTab === 'withdrawn' ? 'No withdrawn proposals' : 'No proposals yet'}
+          </h3>
+          <p className="text-gray-600 mb-6">
+            {activeTab === 'withdrawn' 
+              ? 'You haven\'t withdrawn any proposals yet.' 
+              : 'Start applying to jobs to see your proposals here'}
+          </p>
+          {activeTab !== 'withdrawn' && (
+            <Link to="/find-work">
+              <button className="btn-primary">
+                Browse Jobs
+              </button>
+            </Link>
+          )}
         </div>
       )}
 
-      {/* Tips Section */}
-      <div className="mt-8 grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <div className="bg-gradient-to-br from-blue-50 to-indigo-50 rounded-xl p-6">
-          <h3 className="font-bold text-gray-900 mb-3">💡 Improve Your Proposals</h3>
-          <ul className="text-gray-700 text-sm space-y-2">
-            <li>• Personalize each cover letter for the specific job</li>
-            <li>• Highlight relevant experience from your portfolio</li>
-            <li>• Include specific examples of past work</li>
-            <li>• Ask thoughtful questions about the project</li>
-          </ul>
+      {/* Tips Section - Only show for active proposals */}
+      {activeTab !== 'withdrawn' && filteredProposals.length > 0 && (
+        <div className="mt-8 grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div className="bg-gradient-to-br from-blue-50 to-indigo-50 rounded-xl p-6">
+            <h3 className="font-bold text-gray-900 mb-3">💡 Improve Your Proposals</h3>
+            <ul className="text-gray-700 text-sm space-y-2">
+              <li>• Personalize each cover letter for the specific job</li>
+              <li>• Highlight relevant experience from your portfolio</li>
+              <li>• Include specific examples of past work</li>
+              <li>• Ask thoughtful questions about the project</li>
+            </ul>
+          </div>
+          <div className="bg-gradient-to-br from-green-50 to-emerald-50 rounded-xl p-6">
+            <h3 className="font-bold text-gray-900 mb-3">📈 Track Your Progress</h3>
+            <ul className="text-gray-700 text-sm space-y-2">
+              <li>• Follow up on pending proposals after 3-5 days</li>
+              <li>• Prepare for interviews by researching the company</li>
+              <li>• Update your portfolio with new projects</li>
+              <li>• Ask for feedback on declined proposals</li>
+            </ul>
+          </div>
         </div>
-        <div className="bg-gradient-to-br from-green-50 to-emerald-50 rounded-xl p-6">
-          <h3 className="font-bold text-gray-900 mb-3">📈 Track Your Progress</h3>
-          <ul className="text-gray-700 text-sm space-y-2">
-            <li>• Follow up on pending proposals after 3-5 days</li>
-            <li>• Prepare for interviews by researching the company</li>
-            <li>• Update your portfolio with new projects</li>
-            <li>• Ask for feedback on declined proposals</li>
-          </ul>
-        </div>
-      </div>
+      )}
     </div>
   );
 };
